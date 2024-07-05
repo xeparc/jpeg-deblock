@@ -1,0 +1,13 @@
+name: jpeg
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - torchaudio
+  - torchvision
+  - pytorch
+  - notebook
+  - jupyterlab
+  - matplotlib
+  - scikit-learn
+prefix: /opt/homebrew/Caskroom/miniforge/base/envs/jpeg
