@@ -1,15 +1,18 @@
 import argparse
+import datetime
+import json
 import os
 import pickle
 import re
 import torch
+import torch.optim.adam
 import torch.optim.adam
 import torchvision
 import numpy as np
 import torch.nn as nn
 import torch.utils
 
-from models import ARCNN
+import models
 from dataset import DatasetDeblockPatches
 
 
@@ -21,95 +24,209 @@ TRAIN_PATH = "data/80/train/"
 VAL_PATH   = "data/80/val/"
 TEST_PATH  = "data/80/test/"
 
+DNN_SAVEPATH = "models/"
+
 DEBUG = True
+
 
 # TODO
 # Add image augmentation - rotation, scaling
 # Add regularization
 
 
-def validation_loop(dataloader, model, loss_fn, device):
-    pass
+def test_loop(net, dataloader):
+    loss_fn = nn.MSELoss()
+    mse_list, snr_list = [], []
+    with torch.no_grad():
+        for X, y in dataloader:
+            pred = net(X)
+            mse = loss_fn(pred, y)
+            mse_list.append(mse.item())
+            snr_list.append(10 * np.log10(1 / mse.item()))
+    return {"mse": np.mean(mse_list), "psnr": np.mean(snr_list)}
 
 
-def test_loop(dataloader, model, loss_fn, device):
-    pass
-
-
-def train_loop(dataloader, model, loss_fn, optimizer, device):
+def epoch_loop(net, dataloader, loss_fn, optimizer, print_every=20):
 
     size = len(dataloader.dataset)
+    updates = 0
 
-    train_history = []
+    mse_list, snr_list = [], []
 
-    model.train()
+    net.train()
+
     for batch_num, (X, y) in enumerate(dataloader):
-        pred = model(X.to(device=device))
-        loss = loss_fn(pred, y.to(device=device))
+        pred = net(X)
+        loss = loss_fn(pred, y)
 
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
+        updates += 1
 
-        if (batch_num % 20) == 0:
+        # Keep stats
+        mse_list.append(loss.item())
+        snr_list.append(10 * np.log10(1 / loss.item()))
+
+        # Print
+        if (batch_num % print_every) == 0:
             loss, current = loss.item(), batch_num * 128
             psnr = 10 * np.log10(1 / loss)
             print(f"loss: {loss:>4f}, psnr: {psnr:>4f}, [{current:>5d}/{size:>5d}]")
-            train_history.append(loss)
 
-    return train_history
+    return {"mse": np.mean(mse_list), "psnr": np.mean(snr_list), "updates": updates}
+
+
+def train_loop(net, train_loader, val_loader, n_epochs, learning_rate,
+               output_dir, checkpoint_every=1, optimizer="sgd"):
+
+    loss_fn = nn.MSELoss()
+
+    if optimizer == "adam":
+        optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
+    else:
+        optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
+    optimizer.zero_grad()
+
+    checkpoint_dir = os.path.join(output_dir, "checkpoints")
+    os.makedirs(checkpoint_dir)
+    net_name = net.__class__.__name__
+
+
+    train_metrics = {"epoch": [], "updates": [], "mse": [], "psnr": []}
+    validation_metrics = {"epoch": [], "mse": [], "psnr": []}
+
+    for ep in range(n_epochs):
+        print(f"Epochs {ep + 1}\n-----------------------------")
+
+        epoch_stats = epoch_loop(net, train_loader, loss_fn, optimizer)
+
+        # Save train metrics
+        train_metrics["epoch"].append(ep)
+        train_metrics["mse"].append(epoch_stats["mse"])
+        train_metrics["psnr"].append(epoch_stats["psnr"])
+        train_metrics["updates"].append(epoch_stats["updates"])
+
+        with open(os.path.join(output_dir, "train-stats.json"), mode="wt") as f:
+            json.dump(train_metrics, f)
+
+        # Checkpoint
+        if (ep % checkpoint_every) == 0:
+            # Save optimizer
+            torch.save(optimizer, os.path.join(checkpoint_dir, f"optimizer-{ep}.pt"))
+            # Save net
+            torch.save(net, os.path.join(checkpoint_dir, f"{net_name}-{ep}.pt"))
+
+        # Evaluate on validation set
+        vmetrics = test_loop(net, val_loader)
+        validation_metrics["epoch"].append(ep)
+        validation_metrics["mse"].append(vmetrics["mse"])
+        validation_metrics["psnr"].append(vmetrics["psnr"])
+
+        # Save validation metrics
+        with open(os.path.join(output_dir, "val-stats.json"), mode="wt") as f:
+            json.dump(validation_metrics, f)
+
+    # Save trained model
+    torch.save(net.state_dict(), os.path.join(output_dir, net_name + ".pt"))
 
 
 if __name__ == "__main__":
 
-    batch_size = 64
-    learning_rate = 4e-3
-    version = 0.3
-    quality = 80
-    epochs = 100
-    
-    # Select device
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
+    parser = argparse.ArgumentParser(
+        prog="train-jpeg-deblock",
+        description="Train JPEG Deblock DNN."
+    )
+    parser.add_argument("--compressed_dir", action="store", type=str, required=True,
+                        help="Path to directory with compressed images")
+    parser.add_argument("--originals_dir", action="store", type=str, required=True,
+                        help="Path to directory with original images")
+    parser.add_argument("--subpatch_size", action="store", type=int, default=20,
+                        help="Size of extracted subpatches")
+    parser.add_argument("--model_name", action="store", type=str, required=True,
+                        help="Name of DNN model to use")
+    parser.add_argument("--batch_size", action="store", type=int, default=64,
+                        help="Input batch size")
+    parser.add_argument("--lr", action="store", type=float, default=4e-3,
+                        help="Learning rate")
+    parser.add_argument("--device", action="store", type=str, default="cpu",
+                        help="Device to be used for training")
+    parser.add_argument("--epochs", "-e", action="store", type=int, default=100,
+                        help="Number of training epochs")
+    parser.add_argument("--n_updates", action="store", type=int, default=-1,
+                        help="Number of updates for which the model is trained.")
+    parser.add_argument("--checkpoint_every", action="store", type=int, default=1,
+                        help="Number of epochs")
+    parser.add_argument("--suffix", action="store", type=str, default="",
+                        help="Suffix string added to output directory")
+    parser.add_argument("--optimizer", action="store", type=str, default="sgd",
+                        help="Optmiization algorithm to use")
 
+    args = parser.parse_args()
 
-    modelname = f"ARCNN-quality{quality}-v{version}"
-    model_savepath = f"models/{modelname}.pt"
-    optimizer_savepath = f"models/{modelname}-optimizer.pt"
+    # Check that `compressed_dir` and `originals_dir` contain train/ test/ val/
+    # subfolders
+    for subpath in ("train", "test", "val"):
+        assert os.path.exists(os.path.join(args.compressed_dir, subpath))
+        assert os.path.exists(os.path.join(args.originals_dir, subpath))
 
-    train_data = DatasetDeblockPatches(TRAIN_PATH)
-    val_data = DatasetDeblockPatches(VAL_PATH)
-    test_data = DatasetDeblockPatches(TEST_PATH)
-    print(len(train_data))
+    # Initialize neural net
+    device = torch.device(args.device)
+    model_name = args.model_name
+    net = getattr(models, model_name)().to(device)
 
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_data, batch_size, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_data, batch_size, shuffle=True)
+    # Create output directory to save DNN model & it's checkpoints
+    output_dir = os.path.join("models", model_name + args.suffix)
+    os.makedirs(output_dir, exist_ok=True)
 
-    device = torch.device(device)
-    loss_fn = nn.MSELoss()
-    net = ARCNN().to(device)
-    optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
-    optimizer.zero_grad()
+    # Initialize data loaders
+    train_data = DatasetDeblockPatches(
+        os.path.join(args.compressed_dir, "train"),
+        os.path.join(args.originals_dir, "train"),
+        args.subpatch_size,
+        device
+    )
+    val_data = DatasetDeblockPatches(
+        os.path.join(args.compressed_dir, "val"),
+        os.path.join(args.originals_dir, "val"),
+        args.subpatch_size,
+        device
+    )
+    test_data = DatasetDeblockPatches(
+        os.path.join(args.compressed_dir, "test"),
+        os.path.join(args.originals_dir, "test"),
+        args.subpatch_size,
+        device
+    )
+    train_loader = torch.utils.data.DataLoader(
+        train_data, args.batch_size, shuffle=True
+    )
+    val_loader   = torch.utils.data.DataLoader(
+        val_data, args.batch_size, shuffle=True
+    )
+    test_loader  = torch.utils.data.DataLoader(
+        test_data, args.batch_size, shuffle=True
+    )
 
-    train_history = []
-    for ep in range(epochs):
-        print(f"Epochs {ep + 1}\n-----------------------------")
-        hist = train_loop(train_loader, net, loss_fn, optimizer, device)
-        train_history.extend(hist)
+    # Print train session info
+    with open(os.path.join(output_dir, "traininfo.txt"), mode="wt") as f:
+        today = datetime.datetime.today()
+        print("Train session started at", today.isoformat(timespec="seconds"), file=f)
+        print("=" * 80, file=f)
+        print("Output directory:", output_dir, file=f)
+        print("Compressed images directory:", args.compressed_dir, file=f)
+        print("Original images directory:", args.originals_dir, file=f)
+        print("Subpatch size:", args.subpatch_size, file=f)
+        print("DNN model name:", args.model_name, file=f)
+        print("Optimizer:", args.optimizer, file=f)
+        print("Model architecture:\n", net, "\n", file=f)
+        print("Device:", args.device)
+        print("Batch size:", args.batch_size, file=f)
+        print("Learning rate:", args.lr, file=f)
+        print("Number of epochs:", args.epochs, file=f)
+        print("Checkpoint every:", args.checkpoint_every, file=f)
 
-        # Save model
-        torch.save(net.state_dict(), model_savepath)
-
-        # Save optimizer
-        torch.save(optimizer, optimizer_savepath)
-
-        # Save train history
-        with open(f"models/{modelname}-history.pickle", mode="wb") as f:
-            pickle.dump(train_history, f)
+    train_loop(net, train_loader, val_loader, args.epochs, args.lr, output_dir,
+               args.checkpoint_every, optimizer=args.optimizer)
 
     print("Done!")

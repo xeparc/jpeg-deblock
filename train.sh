@@ -1,0 +1,12 @@
+python train_loop.py \
+--compressed_dir data/40 \
+--originals_dir data/100 \
+--subpatch_size 20 \
+--model_name ARCNN \
+--optimizer adam \
+--batch_size 128 \
+--lr 1e-4 \
+--device mps \
+--epochs 200 \
+--checkpoint_every 4 \
+--suffix="-quality40-v0.1"

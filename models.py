@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 
+
 class ARCNN(nn.Module):
 
     # The first layer performs patch extraction and representation
@@ -48,7 +49,7 @@ class ARCNN(nn.Module):
             for layer in (self.conv1, self.conv2, self.conv3):
                 nn.init.dirac_(layer.weight)
                 dirac = torch.clone(layer.weight)
-                nn.init.normal_(layer.weight, std=1e-2)
+                nn.init.normal_(layer.weight, mean=0.0, std=1e-3)
                 noise = torch.clone(layer.weight)
                 layer.weight = nn.Parameter(noise + dirac)
 

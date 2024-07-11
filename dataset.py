@@ -1,9 +1,9 @@
 import os
 import re
 import torch
+import torch.nn as nn
 import torchvision
 from turbojpeg import TurboJPEG
-
 
 
 IMAGES_PATH = "data/BSDS500/BSDS500/data/images/"
@@ -43,23 +43,29 @@ def cutp(image, height, width):
 #       __init__, __len__, and __getitem__.
 class DatasetDeblockPatches(torch.utils.data.Dataset):
 
-    def __init__(self, path, patchsize=20):
+    def __init__(self, compressed_dir, originals_dir, subpatch_size=20, device="cpu"):
         super().__init__()
-        assert os.path.exists(path)
-        self.imgdir = path
-        self.patchsize = patchsize
-        bilinear = torchvision.transforms.InterpolationMode.BILINEAR
+        assert os.path.exists(compressed_dir)
+        assert os.path.exists(originals_dir)
+
+        self.compressed_dir = os.path.normpath(compressed_dir)
+        self.originals_dir  = os.path.normpath(originals_dir)
+        self.subpatch_size = subpatch_size
         self.tofloat = torchvision.transforms.ConvertImageDtype(torch.float32)
+        self.device = torch.device(device)
 
         # Load images
         self.inputs = []
         self.targets = []
-        for item in os.scandir(self.imgdir):
-            if item.name.endswith(".jpg"):
-                target_path = re.sub(r"/\d{2:3}/", r"/100/", item.path)
+        for item in os.scandir(self.compressed_dir):
+            if item.name.lower().endswith(".jpg") or item.name.lower().endswith(".jpeg"):
+                # Find the pairing target image in `originals_dir` for `item`
+                target_path = os.path.join(self.originals_dir, item.name)
+                # Load images from disk
                 trainimg = torchvision.io.read_image(item.path)
                 targetimg = torchvision.io.read_image(target_path)
                 c, h, w = trainimg.shape
+                # Transpose if image is portrait
                 if h > w:
                     trainimg = trainimg.transpose(1,2)
                     targetimg = targetimg.transpose(1,2)
@@ -67,8 +73,9 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
                 assert trainimg.shape[0] < trainimg.shape[1]
 
                 # Cut into patches
-                x_patches = cutp(trainimg[:, :-1, :-1], patchsize, patchsize)
-                y_patches = cutp(targetimg[:, :-1, :-1], patchsize, patchsize)
+                sps = self.subpatch_size
+                x_patches = cutp(trainimg[:, :-1, :-1], sps, sps)
+                y_patches = cutp(targetimg[:, :-1, :-1], sps, sps)
                 self.inputs.extend(x_patches)
                 self.targets.extend(y_patches)
 
@@ -78,9 +85,11 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
     
     def __getitem__(self, idx):
         image, target = self.inputs[idx], self.targets[idx]
-        # Convert to float
-        return self.tofloat(image), self.tofloat(target)
-    
+        # Convert to float and move to `self.device`
+        x = self.tofloat(image).to(self.device)
+        y =  self.tofloat(target).to(self.device)
+        return x, y
+
 
 def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10)):
     """
