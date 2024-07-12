@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import torch
@@ -12,18 +13,86 @@ QUALITY = [10, 20, 30, 40, 50, 60, 80]
 DEBUG = 0
 
 
-def cutp(image, height, width):
+class ExtractSubpatches:
+    """ Extracts multiple non-overlapping subpatches from a source image."""
+
+    def __init__(self, height, width, pad=False):
+        self.subpatch_h = int(height)
+        self.subpatch_w = int(width)
+        self.padding = bool(pad)
+
+    def __call__(self, image):
+        C, H, W = image.shape
+        h, w = self.subpatch_h, self.subpatch_w
+        if self.padding:
+            pad_w = W % w
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+            pad_h = H % h
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+
+            padded_image = nn.functional.pad(
+                image, (pad_left, pad_right, pad_top, pad_bottom))
+        else:
+            newH = (H // h) * h
+            newW = (W // w) * w
+            padded_image = image[:, :newH, :newW]
+
+        # (C, H, W)
+        patches = padded_image.unfold(dimension=1, size=h, step=h)
+        # (C, nH, W, height)
+        patches = patches.unfold(dimension=2, size=w, step=w)
+        # (C, nH, nW, height, width)
+
+        # Test if they are the same
+        if DEBUG:
+            patches_orig = patches.permute(0, 1, 3, 2, 4).contiguous()
+            assert torch.all(patches_orig.reshape(image.shape) == image)
+
+        return patches.reshape(C, -1, h, w).transpose(0, 1)
+
+
+class AddCheckerboardChannel:
+    """Adds a channel with 8x8 checkerboard pattern to image. This simulates
+    the neighbouring DCT blocks."""
+
+    def __init__(self, gain=0.5, offset_h=0, offset_w=0):
+        assert offset_h < 8
+        assert offset_w < 8
+        self.gain = float(gain)
+        self.offset_h = int(offset_h)
+        self.offset_w = int(offset_w)
+
+    def __call__(self, image):
+        C, H, W = image.shape
+        h, w = math.ceil(H / 8), math.ceil(W / 8)
+        grid = torch.ones((h, w), dtype=torch.float32)
+        grid[::2, ::2] = -grid[::2, ::2]
+        block = torch.full((8,8), self.gain, dtype=torch.float32)
+        channel = torch.kron(grid, block)
+        channel = torch.roll(channel, shifts=(self.offset_h, self.offset_w), dims=(0,1))
+        channel = channel[None, :H, :W]
+        return torch.concat([image, channel], dim=0)
+
+
+def cutp(image, height, width, pad=False):
     """Cuts `image` into nonoverlapping patches."""
     C, H, W = image.shape
-    pad_w = W % width
-    pad_left = pad_w // 2
-    pad_right = pad_w - pad_left
-    pad_h = H % height
-    pad_top = pad_h // 2
-    pad_bottom = pad_h - pad_top
+    if pad:
+        pad_w = W % width
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+        pad_h = H % height
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
 
-    padded_image = nn.functional.pad(
-        image, (pad_left, pad_right, pad_top, pad_bottom))
+        padded_image = nn.functional.pad(
+            image, (pad_left, pad_right, pad_top, pad_bottom))
+    else:
+        h = (H // height) * height
+        w = (W // width)  * width
+        padded_image = image[:, :h, :w]
 
     # (C, H, W)
     patches = padded_image.unfold(dimension=1, size=height, step=height)
@@ -43,7 +112,8 @@ def cutp(image, height, width):
 #       __init__, __len__, and __getitem__.
 class DatasetDeblockPatches(torch.utils.data.Dataset):
 
-    def __init__(self, compressed_dir, originals_dir, subpatch_size=20, device="cpu"):
+    def __init__(self, compressed_dir, originals_dir, subpatch_size=40,
+                 normalize=False, checkerboard=False, device="cpu"):
         super().__init__()
         assert os.path.exists(compressed_dir)
         assert os.path.exists(originals_dir)
@@ -53,6 +123,20 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
         self.subpatch_size = subpatch_size
         self.tofloat = torchvision.transforms.ConvertImageDtype(torch.float32)
         self.device = torch.device(device)
+
+        input_transforms = [self.tofloat]
+        target_transforms = [self.tofloat]
+        if normalize:
+            norm = torchvision.transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            input_transforms.append(norm)
+            target_transforms.append(norm)
+        if checkerboard:
+            input_transforms.append(AddCheckerboardChannel())
+        self.input_transform = torchvision.transforms.Compose(input_transforms)
+        self.target_transform = torchvision.transforms.Compose(target_transforms)
+
+        self.razor = ExtractSubpatches(subpatch_size, subpatch_size, pad=False)
 
         # Load images
         self.inputs = []
@@ -64,20 +148,13 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
                 # Load images from disk
                 trainimg = torchvision.io.read_image(item.path)
                 targetimg = torchvision.io.read_image(target_path)
-                c, h, w = trainimg.shape
-                # Transpose if image is portrait
-                if h > w:
-                    trainimg = trainimg.transpose(1,2)
-                    targetimg = targetimg.transpose(1,2)
-                    h, w = w, h
-                assert trainimg.shape[0] < trainimg.shape[1]
-
-                # Cut into patches
-                sps = self.subpatch_size
-                x_patches = cutp(trainimg[:, :-1, :-1], sps, sps)
-                y_patches = cutp(targetimg[:, :-1, :-1], sps, sps)
-                self.inputs.extend(x_patches)
-                self.targets.extend(y_patches)
+                # Apply transform
+                trainimg  = self.input_transform(trainimg)
+                targetimg = self.target_transform(targetimg)
+                trainpatches = self.razor(trainimg)
+                targetpatches = self.razor(targetimg)
+                self.inputs.extend(trainpatches)
+                self.targets.extend(targetpatches)
 
 
     def __len__(self):
@@ -86,8 +163,8 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         image, target = self.inputs[idx], self.targets[idx]
         # Convert to float and move to `self.device`
-        x = self.tofloat(image).to(self.device)
-        y =  self.tofloat(target).to(self.device)
+        x = image.to(self.device)
+        y = target.to(self.device)
         return x, y
 
 
