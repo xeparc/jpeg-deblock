@@ -29,9 +29,10 @@ class ARCNN(nn.Module):
     # AR-CNN is not equal to deeper SRCNN that contains more than one non-linear
     # mapping layers.
 
-    def __init__(self,):
+    def __init__(self, in_channels=3):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, dtype=torch.float32,
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=64,
+                               dtype=torch.float32,
                                kernel_size=9, stride=1, padding="same")
         self.conv2 = nn.Conv2d(in_channels=64, out_channels=32, dtype=torch.float32,
                                kernel_size=7, stride=1, padding="same")
@@ -58,12 +59,128 @@ class ARCNN(nn.Module):
             # nn.init.normal_(self.conv3.weight, std=1e-2)
             # nn.init.normal_(self.conv4.weight, std=1e-2)
 
-
     def forward(self, x):
         h0 = self.relu1(self.conv1(x))
         h1 = self.relu2(self.conv2(h0))
         h2 = self.relu3(self.conv3(h1))
         y  = self.conv4(h2)
+        return y
+    
+
+class ResNetD(nn.Module):
+
+    def __init__(self, in_channels=3):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=64,
+                               dtype=torch.float32,
+                               kernel_size=9, stride=1, padding="same")
+        self.conv2 = nn.Conv2d(in_channels=64, out_channels=32, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same")
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=16, dtype=torch.float32,
+                               kernel_size=1, stride=1, padding="same")
+        self.conv4 = nn.Conv2d(in_channels=16, out_channels=3, dtype=torch.float32,
+                               kernel_size=5, stride=1, padding="same")
+
+        self.relu1 = nn.LeakyReLU(negative_slope=0.25)
+        self.relu2 = nn.LeakyReLU(negative_slope=0.25)
+        self.relu3 = nn.LeakyReLU(negative_slope=0.25)
+
+        # Initialize
+
+    def forward(self, x):
+        h0 = self.relu1(self.conv1(x))
+        h1 = self.relu2(self.conv2(h0))
+        h2 = self.relu3(self.conv3(h1))
+        y  = x + self.conv4(h2)
+        return y
+    
+
+class ResNetD2(nn.Module):
+
+    def __init__(self, in_channels=3):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=128,
+                               dtype=torch.float32,
+                               kernel_size=9, stride=1, padding="same", padding_mode="reflect")
+        self.conv2 = nn.Conv2d(in_channels=128, out_channels=64, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same", padding_mode="reflect")
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=64, dtype=torch.float32,
+                               kernel_size=1, stride=1, padding="same", padding_mode="reflect")
+        self.conv4 = nn.Conv2d(in_channels=64, out_channels=3, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same", padding_mode="reflect")
+        self.conv5 = nn.Conv2d(in_channels=3, out_channels=64, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same", padding_mode="reflect")
+        self.conv6 = nn.Conv2d(in_channels=64, out_channels=3, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same", padding_mode="reflect")
+
+        self.relu1 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu2 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu3 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu4 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu5 = nn.LeakyReLU(negative_slope=0.1)
+
+        # # Initializeß
+        # with torch.no_grad():
+        #     for layer in (self.conv5, self.conv6):
+        #         nn.init.dirac_(layer.weight)
+        #         dirac = torch.clone(layer.weight)
+        #         nn.init.normal_(layer.weight, mean=0.0, std=1e-3)
+        #         noise = torch.clone(layer.weight)
+        #         layer.weight = nn.Parameter(noise + dirac)
+
+    def forward(self, x):
+        h0 = self.relu1(self.conv1(x))
+        h1 = self.relu2(self.conv2(h0))
+        h2 = self.relu3(self.conv3(h1))
+        h3 = self.relu4(x + self.conv4(h2))
+        h4 = self.relu5(self.conv5(h3))
+        y = self.conv6(h4)
+        return y
+
+
+class ResNetD3(nn.Module):
+
+    def __init__(self, in_channels=3):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=128,
+                               dtype=torch.float32,
+                               kernel_size=9, stride=1, padding="same", padding_mode="reflect")
+        self.conv2 = nn.Conv2d(in_channels=128, out_channels=64, dtype=torch.float32,
+                               kernel_size=7, stride=1, padding="same", padding_mode="reflect")
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=64, dtype=torch.float32,
+                               kernel_size=1, stride=1, padding="same", padding_mode="reflect")
+        self.conv4 = nn.Conv2d(in_channels=64, out_channels=3, dtype=torch.float32,
+                               kernel_size=3, stride=1, padding="same", padding_mode="reflect")
+        self.conv5 = nn.Conv2d(in_channels=3, out_channels=64, dtype=torch.float32,
+                               kernel_size=3, stride=1, padding="same", padding_mode="reflect")
+        self.conv6 = nn.Conv2d(in_channels=64, out_channels=3, dtype=torch.float32,
+                               kernel_size=3, stride=1, padding="same", padding_mode="reflect")
+        
+        self.bnorm = nn.BatchNorm2d(num_features=64)
+
+        self.relu1 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu2 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu3 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu4 = nn.LeakyReLU(negative_slope=0.1)
+        self.relu5 = nn.LeakyReLU(negative_slope=0.1)
+
+        # # Initialize
+        # with torch.no_grad():
+        #     for layer in (self.conv5, self.conv6):
+        #         nn.init.dirac_(layer.weight)
+        #         dirac = torch.clone(layer.weight)
+        #         nn.init.normal_(layer.weight, mean=0.0, std=1e-3)
+        #         noise = torch.clone(layer.weight)
+        #         layer.weight = nn.Parameter(noise + dirac)
+
+    def forward(self, x):
+        h0 = self.relu1(self.conv1(x))
+        h1 = self.relu2(self.conv2(h0))
+        h2 = self.relu3(self.conv3(h1))
+        h2 = self.bnorm(h2)
+        h3 = self.relu4(x + self.conv4(h2))
+        h4 = self.relu5(self.conv5(h3))
+        y = self.conv6(h4)
         return y
 
 
