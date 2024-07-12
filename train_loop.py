@@ -16,22 +16,23 @@ import models
 from dataset import DatasetDeblockPatches
 
 
-ORIGINALS_TRAIN_PATH = "data/100/train/"
-ORIGINALS_VAL_PATH   = "data/100/val/"
-ORIGINALS_TEST_PATH  = "data/100/test/"
-
-TRAIN_PATH = "data/80/train/"
-VAL_PATH   = "data/80/val/"
-TEST_PATH  = "data/80/test/"
-
-DNN_SAVEPATH = "models/"
+ORIGINALS_TRAIN_PATH    = "data/100/train/"
+ORIGINALS_VAL_PATH      = "data/100/val/"
+ORIGINALS_TEST_PATH     = "data/100/test/"
+TRAIN_PATH              = "data/80/train/"
+VAL_PATH                = "data/80/val/"
+TEST_PATH               = "data/80/test/"
+DNN_SAVEPATH            = "models/"
 
 DEBUG = True
 
 
 # TODO
-# Add image augmentation - rotation, scaling
-# Add regularization
+# 1. Log updates magnitude
+# 2. Log convolutional filters
+# 3. Use learning rate decay
+# 4. Use another loss function, PSNR-B
+# 5. Use deeper DNN arhchitecture
 
 
 def test_loop(net, dataloader):
@@ -161,6 +162,8 @@ if __name__ == "__main__":
                         help="Suffix string added to output directory")
     parser.add_argument("--optimizer", action="store", type=str, default="sgd",
                         help="Optmiization algorithm to use")
+    parser.add_argument("--normalize", action="store_true", default=False)
+    parser.add_argument("--checkerboard", action="store_true", default=False)
 
     args = parser.parse_args()
 
@@ -173,7 +176,8 @@ if __name__ == "__main__":
     # Initialize neural net
     device = torch.device(args.device)
     model_name = args.model_name
-    net = getattr(models, model_name)().to(device)
+    channels = 4 if args.checkerboard else 3
+    net = getattr(models, model_name)(channels).to(device)
 
     # Create output directory to save DNN model & it's checkpoints
     output_dir = os.path.join("models", model_name + args.suffix)
@@ -183,20 +187,26 @@ if __name__ == "__main__":
     train_data = DatasetDeblockPatches(
         os.path.join(args.compressed_dir, "train"),
         os.path.join(args.originals_dir, "train"),
-        args.subpatch_size,
-        device
+        subpatch_size=args.subpatch_size,
+        normalize=args.checkerboard,
+        checkerboard=args.checkerboard,
+        device=device
     )
     val_data = DatasetDeblockPatches(
         os.path.join(args.compressed_dir, "val"),
         os.path.join(args.originals_dir, "val"),
-        args.subpatch_size,
-        device
+        subpatch_size=args.subpatch_size,
+        normalize=args.checkerboard,
+        checkerboard=args.checkerboard,
+        device=device
     )
     test_data = DatasetDeblockPatches(
         os.path.join(args.compressed_dir, "test"),
         os.path.join(args.originals_dir, "test"),
-        args.subpatch_size,
-        device
+        subpatch_size=args.subpatch_size,
+        normalize=args.checkerboard,
+        checkerboard=args.checkerboard,
+        device=device
     )
     train_loader = torch.utils.data.DataLoader(
         train_data, args.batch_size, shuffle=True
@@ -208,7 +218,7 @@ if __name__ == "__main__":
         test_data, args.batch_size, shuffle=True
     )
 
-    # Print train session info
+    # Print train session info to file on disk
     with open(os.path.join(output_dir, "traininfo.txt"), mode="wt") as f:
         today = datetime.datetime.today()
         print("Train session started at", today.isoformat(timespec="seconds"), file=f)
@@ -225,8 +235,20 @@ if __name__ == "__main__":
         print("Learning rate:", args.lr, file=f)
         print("Number of epochs:", args.epochs, file=f)
         print("Checkpoint every:", args.checkpoint_every, file=f)
+        print("Normalize images:", args.normalize, file=f)
+        print("Add checkerboard channel:", args.checkerboard, file=f)
+    
+    # Print train session info in terminal
+    with open(os.path.join(output_dir, "traininfo.txt"), mode='r') as f:
+        for line in f:
+            print(line, end='')
+    print("\n\n")
 
     train_loop(net, train_loader, val_loader, args.epochs, args.lr, output_dir,
                args.checkpoint_every, optimizer=args.optimizer)
+
+    tmetrics = test_loop(net, test_loader)
+    with open(os.path.join(output_dir, "test-results.json"), mode='r') as f:
+        json.dump(tmetrics, f)
 
     print("Done!")
