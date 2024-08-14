@@ -28,11 +28,13 @@ DEBUG = True
 
 
 # TODO
+# 0. Overfit a small batch!
 # 1. Log updates magnitude
 # 2. Log convolutional filters
 # 3. Use learning rate decay
 # 4. Use another loss function, PSNR-B
 # 5. Use deeper DNN arhchitecture
+# 6. Add ReduceLROnPlateau
 
 
 def test_loop(net, dataloader):
@@ -69,30 +71,21 @@ def epoch_loop(net, dataloader, loss_fn, optimizer, print_every=20):
         mse_list.append(loss.item())
         snr_list.append(10 * np.log10(1 / loss.item()))
 
-        # Print
-        if (batch_num % print_every) == 0:
-            loss, current = loss.item(), batch_num * 128
-            psnr = 10 * np.log10(1 / loss)
-            print(f"loss: {loss:>4f}, psnr: {psnr:>4f}, [{current:>5d}/{size:>5d}]")
-
-    return {"mse": np.mean(mse_list), "psnr": np.mean(snr_list), "updates": updates}
+    # Print
+    mean_loss = np.mean(mse_list)
+    mean_psnr = np.mean(snr_list)
+    print(f"avg loss: {mean_loss:>4f}, psnr: {mean_psnr:>4f}")
+    return {"mse": mean_loss, "psnr": mean_psnr, "updates": updates}
 
 
-def train_loop(net, train_loader, val_loader, n_epochs, learning_rate,
-               output_dir, checkpoint_every=1, optimizer="sgd"):
+def train_loop(net, optimizer, train_loader, val_loader, n_epochs, output_dir,
+               checkpoint_every=1):
 
     loss_fn = nn.MSELoss()
-
-    if optimizer == "adam":
-        optimizer = torch.optim.Adam(net.parameters(), lr=learning_rate)
-    else:
-        optimizer = torch.optim.SGD(net.parameters(), lr=learning_rate)
-    optimizer.zero_grad()
 
     checkpoint_dir = os.path.join(output_dir, "checkpoints")
     os.makedirs(checkpoint_dir)
     net_name = net.__class__.__name__
-
 
     train_metrics = {"epoch": [], "updates": [], "mse": [], "psnr": []}
     validation_metrics = {"epoch": [], "mse": [], "psnr": []}
@@ -164,6 +157,10 @@ if __name__ == "__main__":
                         help="Optmiization algorithm to use")
     parser.add_argument("--normalize", action="store_true", default=False)
     parser.add_argument("--checkerboard", action="store_true", default=False)
+    parser.add_argument("--load_params", action="store", type=str, default='',
+                        help="Load model from checkpoint")
+    parser.add_argument("--load_optimizer", action="store", type=str, default='',
+                        help="Load optimizer from checkpoint")
 
     args = parser.parse_args()
 
@@ -178,6 +175,22 @@ if __name__ == "__main__":
     model_name = args.model_name
     channels = 4 if args.checkerboard else 3
     net = getattr(models, model_name)(channels).to(device)
+    # ... and maybe load checkpoint
+    if args.load_params:
+        net = torch.load(args.load_params)
+    net.train()
+
+    # Load optimizer from checkpoint
+    if args.load_optimizer:
+        optimizer = torch.load(args.load_optimizer)
+    else:
+    # ... or initialize optimizer
+        if args.optimizer == "adam":
+            optimizer = torch.optim.Adam(net.parameters(), lr=args.lr)
+        else:
+            optimizer = torch.optim.SGD(net.parameters(), lr=args.lr)
+    optimizer.param_groups[0]["lr"] = 1e-5
+    optimizer.zero_grad()
 
     # Create output directory to save DNN model & it's checkpoints
     output_dir = os.path.join("models", model_name + args.suffix)
@@ -219,7 +232,9 @@ if __name__ == "__main__":
     )
 
     # Print train session info to file on disk
-    with open(os.path.join(output_dir, "traininfo.txt"), mode="wt") as f:
+    traininfo_path = os.path.join(output_dir, "traininfo.txt")
+    fmode = "a" if os.path.exists(traininfo_path) else "w"
+    with open(traininfo_path, mode=fmode) as f:
         today = datetime.datetime.today()
         print("Train session started at", today.isoformat(timespec="seconds"), file=f)
         print("=" * 80, file=f)
@@ -239,16 +254,16 @@ if __name__ == "__main__":
         print("Add checkerboard channel:", args.checkerboard, file=f)
     
     # Print train session info in terminal
-    with open(os.path.join(output_dir, "traininfo.txt"), mode='r') as f:
+    with open(traininfo_path, mode='r') as f:
         for line in f:
             print(line, end='')
     print("\n\n")
 
-    train_loop(net, train_loader, val_loader, args.epochs, args.lr, output_dir,
-               args.checkpoint_every, optimizer=args.optimizer)
+    train_loop(net, optimizer, train_loader, val_loader, args.epochs, output_dir,
+               args.checkpoint_every)
 
     tmetrics = test_loop(net, test_loader)
-    with open(os.path.join(output_dir, "test-results.json"), mode='r') as f:
+    with open(os.path.join(output_dir, "test-results.json"), mode='w') as f:
         json.dump(tmetrics, f)
 
     print("Done!")
