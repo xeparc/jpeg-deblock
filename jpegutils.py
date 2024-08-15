@@ -78,6 +78,10 @@ class JPEGData:
 
 
 def get_jpeg_data(img, quality=90, subsample="422"):
+    # Assert that image is color and channel dimension is last
+    assert img.ndim == 3
+    assert img.shape[2] == 3
+
     f = tempfile.NamedTemporaryFile(mode="w+b", delete=True)
     turbo = TurboJPEG()
     subsampledict = {
@@ -103,7 +107,7 @@ def get_jpeg_data(img, quality=90, subsample="422"):
         yuv[0], yuv[1], yuv[2],             # Y, Cb, Cr planes
         dctobj.Y * dctobj.qt[0],            # Dequantized DCT Y
         dctobj.Cb * dctobj.qt[1],           # Dequantized DCT Cb
-        dctobj.Cr * dctobj.qt[2],           # Dequantized DCT Cr
+        dctobj.Cr * dctobj.qt[1],           # Dequantized DCT Cr
         dctobj.qt[0], dctobj.qt[1],         # Y, Cr/Cb quantization tables
         subsample=subsample                 # subsampling mode
     )
