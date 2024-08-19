@@ -1,16 +1,19 @@
+import collections.abc
 import json
 import math
 import os
+import collections
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
 from turbojpeg import TurboJPEG
-from jpeglib import read_dct, read_spatial
+from jpeglib import read_dct
+from tqdm import tqdm
 
 from utils import RunningMeanStd
-from jpegutils import get_jpeg_data, JPEGData
+from jpegutils import get_jpeg_data
 
 
 IMAGES_PATH = "data/BSDS500/BSDS500/data/images/"
@@ -226,54 +229,6 @@ def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10
 
 
 
-def calculate_dct_mean_and_std(input_dir, verbose=True):
-
-    estimator_Y = RunningMeanStd()
-    estimator_C = RunningMeanStd()
-
-    for rootdir, _, filenames in os.walk(input_dir):
-        for file in filenames:
-            fullpath = os.path.join(rootdir, file)
-            if file.endswith(".jpg") or file.endswith(".jpeg"):
-                dctobj = read_dct(fullpath)
-                dctY   = dctobj.Y  * dctobj.qt[0]
-                dctCb  = dctobj.Cb * dctobj.qt[1]
-                dctCr  = dctobj.Cr * dctobj.qt[1]
-            if file.endswith(".png"):
-                img = torchvision.io.read_image(fullpath)
-                dat = get_jpeg_data(img.permute(1,2,0).numpy(), quality=100)
-                dctY, dctCb, dctCr = dat.dctY.numpy(), dat.dctCb.numpy(), dat.dctCr.numpy()
-            else:
-                continue
-
-            dctC = np.stack([dctCb, dctCr], axis=0)
-            assert dctC.shape[0] == 2
-            assert dctC.shape[3] == 8
-            assert dctC.shape[4] == 8
-
-            for block in dctY.reshape(-1, 8, 8):
-                estimator_Y.update(block)
-
-            for block in dctC.reshape(-1, 8, 8):
-                estimator_C.update(block)
-            
-            if verbose:
-                print(fullpath)
-
-    return {
-        "dct_Y_mean": estimator_Y.mean,
-        "dct_C_mean": estimator_C.mean,
-        "dct_Y_std":  estimator_Y.std,
-        "dct_C_std":  estimator_C.std
-    }
-
 
 if __name__ == "__main__":
-
-    # Calculate DCT coefficients mean and std
-    images_paths = ["data/DIV2K/"]
-    stats = calculate_dct_mean_and_std(images_paths[0])
-
-    with open("DIV2K-DCT-coeff-stats.json", mode="wt") as f:
-        json.dump({k: v.tolist() for k, v in stats.items()}, f)
-    
+    pass

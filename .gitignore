@@ -3,6 +3,8 @@ data/
 models/
 literature/
 *.pdf
+*.jpg
+*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
