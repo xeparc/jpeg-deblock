@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from jpegutils import SUBSAMPLE_FACTORS
 
 
 class ARCNN(nn.Module):
@@ -377,3 +378,118 @@ class DctTransformer(nn.Module):
             z = encoder(z, qcoeff)
         out = z
         return out
+
+
+class ConvertYccToRGB(torch.nn.Module):
+
+    def __init__(self):
+        """Transforms image from YCbCr color space to RGB.
+        Range of pixels is assumed to be [0,1]."""
+        super().__init__()
+
+        # Uses values from libjpeg-6b. See "jdcolor.c"
+        #
+        # * The conversion equations to be implemented are therefore
+        # *	R = Y                + 1.40200 * Cr
+        # *	G = Y - 0.34414 * Cb - 0.71414 * Cr
+        # *	B = Y + 1.77200 * Cb
+        # * where Cb and Cr represent the incoming values less CENTERJSAMPLE.
+        matrix = torch.tensor(
+            [[1.0,  0.0,       1.40200],
+             [1.0,  -0.34414, -0.71414],
+             [1.0,  1.772,         0.0]], dtype=torch.float32
+        )
+        offset = torch.tensor([0.0, -128/255, -128/255], dtype=torch.float32)
+        self.register_buffer("conv_matrix", matrix)
+        self.register_buffer("offset", offset)
+
+    def forward(self, x):
+        # x.shape =                 (B,3,H,W)
+        # self.conv_matrix.shape  = (3,3)
+        # Subtract 0.5 from CbCr
+        yuv = x + self.offset.view(1, 3, 1, 1)
+        rgb = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, yuv.transpose(0,1))
+        return rgb.transpose(0,1)
+
+class ConvertRGBToYcc(torch.nn.Module):
+    
+    def __init__(self):
+        super().__init__()
+
+        # Uses values from libjpeg-6b. See "jccolor.c"
+        #
+        # * The conversion equations to be implemented are therefore
+        # *	Y  =  0.29900 * R + 0.58700 * G + 0.11400 * B
+        # *	Cb = -0.16874 * R - 0.33126 * G + 0.50000 * B  + CENTERJSAMPLE
+        # *	Cr =  0.50000 * R - 0.41869 * G - 0.08131 * B  + CENTERJSAMPLE
+        matrix = torch.tensor(
+            [[ 0.29900,  0.58700,  0.11400],
+             [-0.16874, -0.33126,  0.50000],
+             [ 0.50000, -0.41869, -0.08131]], dtype=torch.float32
+        )
+        offset = torch.tensor([0.0, 128/255, 128/255], dtype=torch.float32)
+        self.register_buffer("conv_matrix", matrix)
+        self.register_buffer("offset", offset)
+
+    def forward(self, x):
+        yuv = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, x.transpose(0,1))
+        yuv = yuv.transpose(0,1) + self.offset.view(1, 3, 1, 1)
+        return yuv.clip(min=0.0, max=1.0)
+
+
+class UpsampleChrominance(torch.nn.Module):
+
+    def __init__(self, subsample):
+        super().__init__()
+        self.repeats = SUBSAMPLE_FACTORS[subsample]
+
+    def forward(self, x):
+        # x.shape = (B, C, H, W)
+        y = torch.repeat_interleave(x, self.repeats[0], dim=2)
+        y = torch.repeat_interleave(y, self.repeats[1], dim=3)
+        return y
+
+
+class InverseDCT(torch.nn.Module):
+
+    def __init__(self, mean=None, std=None):
+        super().__init__()
+        
+        # Make Type III harmonics
+        steps = torch.arange(8, requires_grad=False) / 16
+        f = 2 * torch.arange(8, requires_grad=False) + 1
+        h1 = torch.cos(torch.outer(steps, f * torch.pi))
+        h2 = h1.clone()
+        # Make IDCT basis
+        basis = h1.T.view(8, 1, 8, 1) * h2.T.view(1, 8, 1, 8)
+        self.register_buffer("basis", basis)        # (8,8, 8,8)
+        # Make normalization matrix
+        c = torch.ones(8, dtype=torch.float32)
+        c[0] = torch.sqrt(torch.tensor(0.5, dtype=torch.float32))
+        C = 0.25 * torch.outer(c, c)
+        self.register_buffer("scale", C)
+
+        if mean is None:
+            self.register_buffer("mean", torch.zeros(64, dtype=torch.float32))
+        else:
+            self.register_buffer("mean", mean.float())
+
+        if std is None:
+            self.register_buffer("std", torch.ones(64, dtype=torch.float32))
+        else:
+            self.register_buffer("std", std.float())
+
+    def forward(self, dct):
+        # (B, 64, H, W)
+        B, C, H, W = dct.shape
+        assert C == 64
+        # Normalize
+        dct = dct * self.std.view(1, 64, 1, 1) + self.mean.view(1, 64, 1, 1)
+        # Reshape
+        dct = dct.view(B, 1, 1, 8, 8, H, W)
+        C = self.scale.view(1, 1, 1, 8, 8, 1, 1)
+        basis = self.basis.view(1, 8, 8, 8, 8, 1, 1)
+        res = torch.sum(C * basis * dct, dim=(3,4))         # (B, 8, 8, H, W)
+        res = res.permute(0, 3, 1, 4, 2).contiguous()       # (B, H, 8, W, 8)
+
+        return (res.view(B, 1, 8*H, 8*W) + 128.0) / 255.0

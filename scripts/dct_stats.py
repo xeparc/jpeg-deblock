@@ -6,11 +6,10 @@ import json
 import os
 
 import numpy as np
-import torchvision
 from tqdm import tqdm
 
 import context
-from jpegutils import JPEGImageData
+from jpegutils import JPEGTransforms
 from utils import RunningMeanStd
 
 
@@ -53,12 +52,11 @@ if __name__ == "__main__":
 
     # Calculate DCT coefficients mean and std
     for impath in iterable:
-        rgb = torchvision.io.read_image(impath)
-        dat = JPEGImageData(rgb.permute(1,2,0).numpy(), quality=100)
-        dctY  = dat.dctY.numpy()
-        dctCb = dat.dctCb.numpy()
-        dctCr = dat.dctCr.numpy()
-        dctC = np.stack([dctCb, dctCr], axis=0)
+        rgb = JPEGTransforms.read(impath)
+        jpeg = JPEGTransforms(rgb)
+        dct = jpeg.get_dct_planes(subsample="444")
+        dctY  = dct[0]
+        dctC = np.stack([dct[1], dct[2]], axis=0)
         assert dctC.shape[0] == 2
         assert dctC.shape[3] == 8
         assert dctC.shape[4] == 8
