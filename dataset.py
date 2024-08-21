@@ -1,20 +1,19 @@
+import collections
 import collections.abc
-import json
 import math
 import os
-import collections
+from collections import defaultdict
+from typing import List, Union, Callable
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
+from PIL import Image
 from turbojpeg import TurboJPEG
-from jpeglib import read_dct
-from tqdm import tqdm
 
-from utils import RunningMeanStd
-from jpegutils import get_jpeg_data
-
+from utils import is_image
+from jpegutils import JPEGTransforms
 
 IMAGES_PATH = "data/BSDS500/BSDS500/data/images/"
 OUTPUT_PATH = "data/"
@@ -60,7 +59,36 @@ class ExtractSubpatches:
             assert torch.all(patches_orig.reshape(image.shape) == image)
 
         return patches.reshape(C, -1, h, w).transpose(0, 1)
+    
 
+class  ToDCTTensor:
+
+    def __init__(self, y_mean, y_std, c_mean, c_std, eps=1e-5):
+        assert y_mean.shape == (8,8)
+        assert y_mean.shape == y_std.shape == c_mean.shape == c_std.shape
+        self.y_mean = torch.as_tensor(y_mean).float()
+        self.c_mean = torch.as_tensor(c_mean).float()
+        self.y_std = torch.as_tensor(y_std).float() + eps
+        self.c_std = torch.as_tensor(c_std).float() + eps
+        self.skip_y = torch.all(self.y_mean == 0.0) and torch.all(self.y_std == 1.0)
+        self.skip_c = torch.all(self.c_mean == 0.0) and torch.all(self.c_std == 1.0)
+
+    def __call__(self, dct: np.ndarray, chroma: bool):
+        assert dct.ndim >= 4
+        assert dct.shape[2] == dct.shape[3] == 8
+        out_shape = dct.shape[:-2] + (64,)
+        dct = torch.from_numpy(dct)
+        if chroma:
+            if self.skip_c:
+                res = dct
+            else:
+                res = (dct - self.c_mean) / self.c_std
+        else:
+            if self.skip_y:
+                res = dct
+            else:
+                res = (dct - self.y_mean) / self.y_std
+        return res.view(out_shape).permute(2,0,1).contiguous()
 
 class AddCheckerboardChannel:
     """Adds a channel with 8x8 checkerboard pattern to image. This simulates
@@ -176,6 +204,144 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
         x = image.to(self.device)
         y = target.to(self.device)
         return x, y
+
+
+class DatasetQuantizedJPEG(torch.utils.data.Dataset):
+
+    def __init__(
+            self,
+            image_dirs: Union[str, collections.abc.Iterable],
+            patch_size: int,
+            num_patches: int,
+            min_quality: int,
+            max_quality: int,
+            target_quality: int,
+            subsample: str,
+            # normalize_rgb: bool,
+            # normalize_ycc: bool,
+            transform_dct: Callable,
+            use_lq_rgb: bool,
+            use_lq_ycc: bool,
+            use_lq_dct: bool,
+            use_hq_rgb: bool,
+            use_hq_ycc: bool,
+            use_hq_dct: bool,
+            use_qtables: bool,
+            seed = None,
+            cached: bool = False
+    ):
+
+        if isinstance(image_dirs, str):
+            image_dirs = (image_dirs,)
+
+        assert subsample in "444 422 420 411 440".split()
+        assert 1 <= min_quality <= max_quality <= 100
+        assert 1 <= target_quality <= 100
+        assert 1 <= patch_size
+
+        self.patch_size = patch_size
+        self.subsample = subsample
+        self.min_quality = min_quality
+        self.max_quality = max_quality
+        self.target_quality = target_quality
+        self.num_patches = num_patches
+        self.transform_rgb = torchvision.transforms.ToTensor()
+        self.transform_ycc = torchvision.transforms.ToTensor()
+        self.transform_dct = transform_dct
+        self.use_lq_rgb = use_lq_rgb
+        self.use_lq_ycc = use_lq_ycc
+        self.use_lq_dct = use_lq_dct
+        self.use_hq_rgb = use_hq_rgb
+        self.use_hq_ycc = use_hq_ycc
+        self.use_hq_dct = use_hq_dct
+        self.use_qtables = use_qtables
+        self.seed = seed
+        self.cached = cached
+
+        self.image_paths = []
+        for _dir in image_dirs:
+            assert os.path.exists(_dir)
+            for root, _, filenames in os.walk(_dir):
+                for fname in filter(is_image, filenames):
+                    self.image_paths.append(os.path.join(root, fname))
+        
+        self.crop = torchvision.transforms.RandomCrop(size=self.patch_size)
+        self.rng = np.random.default_rng(self.seed)
+
+    def __len__(self) -> int:
+        return len(self.image_paths)
+
+    def __getitem__(self, index: int) -> dict:
+        # Get filepath of image
+        impath = self.image_paths[index]
+        # Read image
+        image = Image.open(impath)
+
+        # Sample array of JPEG qualities
+        qualities = self.rng.integers(
+            self.min_quality, self.max_quality, size=self.num_patches)
+
+        transform_rgb = self.transform_rgb
+        transform_ycc = self.transform_ycc
+        transform_dct = self.transform_dct
+        result = defaultdict(list)
+
+        # Extract patches
+        for quality in qualities:
+            quality = quality
+            # Crop patch
+            patch = self.crop(image)
+            patchT = JPEGTransforms(np.array(patch))
+            # Save metadata
+            result["filepath"].append(impath)
+            result["quality"].append(quality)
+
+            # High quality RGB
+            if self.use_hq_rgb:
+                result["hq_rgb"].append(transform_rgb(patchT.get_rgb()))
+            # High quality YCbCr (downsampled + upsampled)
+            if self.use_hq_ycc:
+                y, cb, cr = patchT.get_ycc_planes(self.subsample)
+                result["hq_y"].append(transform_ycc(y))
+                result["hq_cb"].append(transform_ycc(cb))
+                result["hq_cr"].append(transform_ycc(cr))
+            # High quality DCT coefficients
+            if self.use_hq_dct:
+                dct = patchT.get_dct_planes(self.subsample)
+                result["hq_dct_y"].append(transform_dct(dct[0], chroma=False))
+                result["hq_dct_cb"].append(transform_dct(dct[1], chroma=True))
+                result["hq_dct_cr"].append(transform_dct(dct[2], chroma=True))
+
+            quantized = patchT.encode(quality=quality, subsample=self.subsample)
+            quantized_rgb = patchT.decode_rgb(quantized, subsample=self.subsample)
+            quantizedT = JPEGTransforms(quantized_rgb)
+
+            # Quantization tables
+            if self.use_qtables:
+                result["qt_y"].append(quantizedT.get_y_qtable(quality))
+                result["qt_c"].append(quantizedT.get_c_qtable(quality))
+
+            # Low quality RGB
+            if self.use_lq_rgb:
+                result["lq_rgb"].append(transform_rgb(quantizedT.get_rgb()))
+            # Low quality YCbCr (downsampled + upsampled)
+            if self.use_lq_ycc:
+                y, cb, cr = quantizedT.get_ycc_planes(self.subsample)
+                result["lq_y"].append(transform_ycc(y))
+                result["lq_cb"].append(transform_ycc(cb))
+                result["lq_cr"].append(transform_ycc(cr))
+            # Low quality DCT coefficients
+            if self.use_lq_dct:
+                dct = quantizedT.get_dct_planes(self.subsample)
+                result["lq_dct_y"].append(transform_dct(dct[0], chroma=False))
+                result["lq_dct_cb"].append(transform_dct(dct[1], chroma=True))
+                result["lq_dct_cr"].append(transform_dct(dct[2], chroma=True))
+
+        if self.num_patches == 1:
+            return {k: v[0] for k,v in result.items()}
+        return result
+
+
 
 
 def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10)):
