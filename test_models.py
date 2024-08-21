@@ -11,9 +11,9 @@ from timeit import timeit
 from timeit import Timer
 
 from models import (
-    LocalAttentionBlock,
-    LocalTransformerEncoder,
-    DctTransformer
+    Local2DAttentionLayer,
+    LFDTEncoderLayer,
+    LFDTEncoder
 )
 
 
@@ -27,7 +27,7 @@ def test_LocalAttentionBlock(
     in_shape = (batch_size, embed_dim, imsize, imsize)
     out_shape = (batch_size, embed_dim, imsize, imsize)
     sample_input = torch.randn(in_shape, dtype=torch.float32).to(device=device)
-    attn_block = LocalAttentionBlock(kernel_size, embed_dim, num_heads)
+    attn_block = Local2DAttentionLayer(kernel_size, embed_dim, num_heads)
     attn_block.to(device=device)
 
     output = attn_block(sample_input)
@@ -50,7 +50,7 @@ def test_LocalTransformerEncoder(
     sample_image = torch.randn(img_shape, dtype=torch.float32).to(device=device)
     sample_coeff = torch.randn(qct_shape, dtype=torch.float32).to(device=device)
 
-    encoder = LocalTransformerEncoder(
+    encoder = LFDTEncoderLayer(
         kernel_size, d_model, d_qcoeff, num_heads, d_feedforward
     ).to(device=device)
 
@@ -80,7 +80,7 @@ def test_DctTransformer(
     sample_image = torch.randn(img_shape, dtype=torch.float32).to(device=device)
     sample_coeff = torch.randn(qct_shape, dtype=torch.float32).to(device=device)
 
-    transformer = DctTransformer(
+    transformer = LFDTEncoder(
         in_features, num_encoders, kernel_size, d_model, d_qcoeff, num_heads,
         d_feedforward
     ).to(device=device)

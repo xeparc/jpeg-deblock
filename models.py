@@ -21,7 +21,7 @@ class ARCNN(nn.Module):
     #   - feature enhancement
     #   - mapping
     #   - reconstruction layer
-    
+
     # AR-CNN uses Parametric Rectified Linear Unit (PReLU):
     #   PReLU(x) = max(x, 0) + a * min(0,x)
     # PReLU is mainly used to avoid the "dead features" caused by zero
@@ -66,7 +66,7 @@ class ARCNN(nn.Module):
         h2 = self.relu3(self.conv3(h1))
         y  = self.conv4(h2)
         return y
-    
+
 
 class ResNetD(nn.Module):
 
@@ -94,7 +94,7 @@ class ResNetD(nn.Module):
         h2 = self.relu3(self.conv3(h1))
         y  = x + self.conv4(h2)
         return y
-    
+
 
 class ResNetD2(nn.Module):
 
@@ -156,7 +156,7 @@ class ResNetD3(nn.Module):
                                kernel_size=3, stride=1, padding="same", padding_mode="reflect")
         self.conv6 = nn.Conv2d(in_channels=64, out_channels=3, dtype=torch.float32,
                                kernel_size=3, stride=1, padding="same", padding_mode="reflect")
-        
+
         self.bnorm = nn.BatchNorm2d(num_features=64)
 
         self.relu1 = nn.LeakyReLU(negative_slope=0.1)
@@ -209,7 +209,7 @@ class SRCNN(nn.Module):
         return y
 
 
-class LocalAttentionBlock(nn.Module):
+class Local2DAttentionLayer(nn.Module):
 
     def __init__(self, kernel_size=7, embed_dim=128, num_heads=4, bias=True,
                  add_bias_kqv=True):
@@ -287,12 +287,12 @@ class LocalAttentionBlock(nn.Module):
         return out.reshape(N, H, W, E).permute(0,3,1,2)
 
 
-class LocalTransformerEncoder(nn.Module):
+class LFDTEncoderLayer(nn.Module):
 
     def __init__(self, kernel_size=7, d_model=128, d_qcoeff=64, num_heads=4,
                  d_feedforward=512, dropout=0.1, activation=nn.GELU, bias=True,
                  layer_norm_eps=1e-05, add_bias_kqv=True):
-        
+
         super().__init__()
 
         self.kernel_size    = kernel_size
@@ -306,7 +306,7 @@ class LocalTransformerEncoder(nn.Module):
         self.bias           = bias
         self.add_bias_kv    = add_bias_kqv
 
-        self.local_attention = LocalAttentionBlock(
+        self.local_attention = Local2DAttentionLayer(
             kernel_size=kernel_size,
             embed_dim=d_model,
             num_heads=num_heads,
@@ -327,13 +327,13 @@ class LocalTransformerEncoder(nn.Module):
             nn.Dropout(p=dropout),
             nn.Linear(in_features=d_feedforward, out_features=d_model),
         )
-  
+
     def forward(self, x, qcoeff):
-        # qcoeff is not batched
+        # qcoeff is batched
 
         E = self.d_model
         N, C, H, W = x.shape
-        qcoeff = torch.tile(qcoeff.view(1, 1, 1, self.d_qcoeff), (N, H, W, 1))
+        qcoeff = torch.tile(qcoeff.view(1, 1, 1, self.d_qcoeff), (1, H, W, 1))
 
         xnorm = self.layernorm1(x.permute(0, 2, 3, 1))          # (N, H, W, E)
         z0 = self.local_attention(xnorm.permute(0, 3, 1, 2))    # (N, E, H, W)
@@ -346,15 +346,15 @@ class LocalTransformerEncoder(nn.Module):
 
 
 
-class DctTransformer(nn.Module):
+class LFDTEncoder(nn.Module):
 
-    def __init__(self, in_features=64, num_encoders=4, kernel_size=7, d_model=128,
+    def __init__(self, in_features=64, num_layers=4, window_size=7, d_model=128,
                  d_qcoeff=64, num_heads=4, d_feedforward=1024, dropout=0.1,
                  activation=nn.GELU, bias=True, add_bias_kqv=True
         ):
         super().__init__()
 
-        self.num_encoders = num_encoders
+        self.num_layers = num_layers
         self.embed_dim  = d_model
 
         # Input Embedding Layer
@@ -363,10 +363,10 @@ class DctTransformer(nn.Module):
 
         self.positional_embedding = nn.Linear
         encoders = [
-            LocalTransformerEncoder(kernel_size, d_model, d_qcoeff, num_heads,
+            LFDTEncoderLayer(window_size, d_model, d_qcoeff, num_heads,
                                     d_feedforward, dropout, activation, bias,
                                     add_bias_kqv=add_bias_kqv)
-                for _ in range(num_encoders)
+                for _ in range(num_layers)
         ]
         self.encoders = nn.ModuleList(encoders)
 
@@ -412,7 +412,7 @@ class ConvertYccToRGB(torch.nn.Module):
         return rgb.transpose(0,1)
 
 class ConvertRGBToYcc(torch.nn.Module):
-    
+
     def __init__(self):
         super().__init__()
 
@@ -437,7 +437,7 @@ class ConvertRGBToYcc(torch.nn.Module):
         return yuv.clip(min=0.0, max=1.0)
 
 
-class UpsampleChrominance(torch.nn.Module):
+class ChromeUpsample(torch.nn.Module):
 
     def __init__(self, subsample):
         super().__init__()
@@ -450,11 +450,22 @@ class UpsampleChrominance(torch.nn.Module):
         return y
 
 
+class ChromaCrop(torch.nn.Module):
+
+    def __init__(self, height: int, width: int):
+        self.height = height
+        self.width  = width
+
+    def forward(self, x: torch.FloatTensor):
+        return x[:, :, :self.height, :self.width]
+
+
 class InverseDCT(torch.nn.Module):
 
-    def __init__(self, mean=None, std=None):
+    def __init__(self, luma_mean=None, luma_std=None,
+                       chroma_mean=None, chroma_std=None):
         super().__init__()
-        
+
         # Make Type III harmonics
         steps = torch.arange(8, requires_grad=False) / 16
         f = 2 * torch.arange(8, requires_grad=False) + 1
@@ -469,27 +480,61 @@ class InverseDCT(torch.nn.Module):
         C = 0.25 * torch.outer(c, c)
         self.register_buffer("scale", C)
 
-        if mean is None:
-            self.register_buffer("mean", torch.zeros(64, dtype=torch.float32))
+        if luma_mean is None:
+            self.register_buffer("luma_mean", torch.zeros(64).float())
         else:
-            self.register_buffer("mean", mean.float())
+            self.register_buffer("luma_mean", torch.as_tensor(luma_mean).float())
 
-        if std is None:
-            self.register_buffer("std", torch.ones(64, dtype=torch.float32))
+        if luma_std is None:
+            self.register_buffer("luma_std", torch.ones(64).float())
         else:
-            self.register_buffer("std", std.float())
+            self.register_buffer("luma_std", torch.as_tensor(luma_std).float())
 
-    def forward(self, dct):
+        if chroma_mean is None:
+            self.register_buffer("chroma_mean", torch.zeros(64).float())
+        else:
+            self.register_buffer("chroma_mean", torch.as_tensor(chroma_mean).float())
+
+        if chroma_std is None:
+            self.register_buffer("chroma_std", torch.zeros(64).float())
+        else:
+            self.register_buffer("chroma_std", torch.as_tensor(chroma_std).float())
+
+    def forward(self, dct: torch.FloatTensor, chroma: bool):
         # (B, 64, H, W)
         B, C, H, W = dct.shape
         assert C == 64
         # Normalize
-        dct = dct * self.std.view(1, 64, 1, 1) + self.mean.view(1, 64, 1, 1)
+        if chroma:
+            out = dct * self.chroma_std.view(1, 64, 1, 1) + self.chroma_mean.view(1, 64, 1, 1)
+        else:
+            out = dct * self.luma_std.view(1, 64, 1, 1) + self.luma_mean.view(1, 64, 1, 1)
         # Reshape
-        dct = dct.view(B, 1, 1, 8, 8, H, W)
+        out = out.view(B, 1, 1, 8, 8, H, W)
         C = self.scale.view(1, 1, 1, 8, 8, 1, 1)
         basis = self.basis.view(1, 8, 8, 8, 8, 1, 1)
-        res = torch.sum(C * basis * dct, dim=(3,4))         # (B, 8, 8, H, W)
+        res = torch.sum(C * basis * out, dim=(3,4))         # (B, 8, 8, H, W)
         res = res.permute(0, 3, 1, 4, 2).contiguous()       # (B, H, 8, W, 8)
 
         return (res.view(B, 1, 8*H, 8*W) + 128.0) / 255.0
+
+
+class FDNet(nn.Module):
+
+    def __init__(self, blocks):
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self,
+                dct_tensor: torch.FloatTensor,
+                qt_tensor: torch.FloatTensor,
+                chroma: bool
+        ):
+        x = dct_tensor
+        for block in self.blocks:
+            if isinstance(block, LFDTEncoder):
+                x = block(x, qt_tensor)
+            elif isinstance(block, nn.Conv2d):
+                x = block(x)
+            elif isinstance(block, InverseDCT):
+                x = block(x, chroma)
+        return x
