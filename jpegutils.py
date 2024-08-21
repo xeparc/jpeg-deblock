@@ -1,4 +1,5 @@
 from typing import List
+from functools import lru_cache
 
 import numpy as np
 from scipy.fft import dctn, idctn
@@ -72,10 +73,12 @@ class JPEGTransforms:
     def get_rgb(self) -> np.ndarray:
         return self.rgb
 
+    @lru_cache
     def get_ycc_planes(self, subsample: str) -> List[np.ndarray]:
         planes = rgb2ycc(self.rgb)
         return subsample_chrominance(planes, subsample=subsample)
 
+    @lru_cache
     def get_upsampled_ycc_planes(self, subsample: str) -> List[np.ndarray]:
         planes = self.get_ycc_planes(subsample)
         upsampled = upsample_chrominance(planes, subsample)
@@ -83,6 +86,7 @@ class JPEGTransforms:
         res = [plane[:self.height, :self.width] for plane in upsampled]
         return np.stack(res, axis=0)
 
+    @lru_cache
     def get_dct_planes(self, subsample: str) -> List[np.ndarray]:
         ycc_planes = self.get_ycc_planes(subsample)
         ycc_plane_blocks = to_data_units(ycc_planes)
@@ -94,10 +98,11 @@ class JPEGTransforms:
             result.append(plane_dct)
         return result
 
+    @lru_cache
     def encode(self, quality: int, subsample) -> List[np.ndarray]:
         dct_planes = self.get_dct_planes(subsample=subsample)
-        qtab_y = get_qtable(quality, chrominance=False)
-        qtab_c = get_qtable(quality, chrominance=True)
+        qtab_y = self.get_y_qtable(quality)
+        qtab_c = self.get_c_qtable(quality)
 
         encoded = []
         for plane, qt in zip(dct_planes, (qtab_y, qtab_c, qtab_c)):
@@ -128,6 +133,14 @@ class JPEGTransforms:
         assert rgb.shape[1] == self.width
         assert rgb.shape[2] == self.channels
         return np.ascontiguousarray(rgb).astype(np.uint8)
+
+    @lru_cache
+    def get_y_qtable(self, quality: int) -> np.ndarray:
+        return get_qtable(quality, chrominance=False)
+
+    @lru_cache
+    def get_c_qtable(self, quality: int) -> np.ndarray:
+        return get_qtable(quality, chrominance=True)
 
 
 def rgb2ycc(rgb: np.ndarray) -> np.ndarray:
