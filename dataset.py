@@ -59,7 +59,7 @@ class ExtractSubpatches:
             assert torch.all(patches_orig.reshape(image.shape) == image)
 
         return patches.reshape(C, -1, h, w).transpose(0, 1)
-    
+
 
 class  ToDCTTensor:
 
@@ -197,7 +197,7 @@ class DatasetDeblockPatches(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.inputs)
-    
+
     def __getitem__(self, idx):
         image, target = self.inputs[idx], self.targets[idx]
         # Convert to float and move to `self.device`
@@ -264,7 +264,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             for root, _, filenames in os.walk(_dir):
                 for fname in filter(is_image, filenames):
                     self.image_paths.append(os.path.join(root, fname))
-        
+
         self.crop = torchvision.transforms.RandomCrop(size=self.patch_size)
         self.rng = np.random.default_rng(self.seed)
 
@@ -341,7 +341,21 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             return {k: v[0] for k,v in result.items()}
         return result
 
-
+    @staticmethod
+    def collate_fn(batch):
+        temp = {}
+        for item in batch:
+            for k, v in item.items():
+                if isinstance(v, list):
+                    temp.setdefault(k, []).extend(v)
+                else:
+                    temp.setdefault(k, []).append(v)
+        res = {}
+        for k, collection in temp.items():
+            if isinstance(collection[0], torch.Tensor):
+                res[k] = torch.stack(collection, dim=0)
+            else:
+                res[k] = collection
 
 
 def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10)):
