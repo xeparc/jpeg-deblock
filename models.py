@@ -287,7 +287,7 @@ class Local2DAttentionLayer(nn.Module):
         return out.reshape(N, H, W, E).permute(0,3,1,2)
 
 
-class LFDTEncoderLayer(nn.Module):
+class SpectralEncoderLayer(nn.Module):
 
     def __init__(self, kernel_size=7, d_model=128, d_qcoeff=64, num_heads=4,
                  d_feedforward=512, dropout=0.1, activation=nn.GELU, bias=True,
@@ -346,7 +346,7 @@ class LFDTEncoderLayer(nn.Module):
 
 
 
-class LFDTEncoder(nn.Module):
+class SpectralEncoder(nn.Module):
 
     def __init__(self, in_features=64, num_layers=4, window_size=7, d_model=128,
                  d_qcoeff=64, num_heads=4, d_feedforward=1024, dropout=0.1,
@@ -363,7 +363,7 @@ class LFDTEncoder(nn.Module):
 
         self.positional_embedding = nn.Linear
         encoders = [
-            LFDTEncoderLayer(window_size, d_model, d_qcoeff, num_heads,
+            SpectralEncoderLayer(window_size, d_model, d_qcoeff, num_heads,
                                     d_feedforward, dropout, activation, bias,
                                     add_bias_kqv=add_bias_kqv)
                 for _ in range(num_layers)
@@ -410,6 +410,7 @@ class ConvertYccToRGB(torch.nn.Module):
         yuv = x + self.offset.view(1, 3, 1, 1)
         rgb = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, yuv.transpose(0,1))
         return rgb.transpose(0,1)
+
 
 class ConvertRGBToYcc(torch.nn.Module):
 
@@ -519,9 +520,10 @@ class InverseDCT(torch.nn.Module):
         return (res.view(B, 1, 8*H, 8*W) + 128.0) / 255.0
 
 
-class FDNet(nn.Module):
+class SpectralNet(nn.Module):
 
     def __init__(self, blocks):
+        super().__init__()
         self.blocks = nn.ModuleList(blocks)
 
     def forward(self,
@@ -531,10 +533,12 @@ class FDNet(nn.Module):
         ):
         x = dct_tensor
         for block in self.blocks:
-            if isinstance(block, LFDTEncoder):
+            if isinstance(block, SpectralEncoder):
                 x = block(x, qt_tensor)
             elif isinstance(block, nn.Conv2d):
                 x = block(x)
             elif isinstance(block, InverseDCT):
                 x = block(x, chroma)
         return x
+
+

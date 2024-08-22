@@ -12,8 +12,8 @@ from timeit import Timer
 
 from models import (
     Local2DAttentionLayer,
-    LFDTEncoderLayer,
-    LFDTEncoder
+    SpectralEncoderLayer,
+    SpectralEncoder
 )
 
 
@@ -50,7 +50,7 @@ def test_LocalTransformerEncoder(
     sample_image = torch.randn(img_shape, dtype=torch.float32).to(device=device)
     sample_coeff = torch.randn(qct_shape, dtype=torch.float32).to(device=device)
 
-    encoder = LFDTEncoderLayer(
+    encoder = SpectralEncoderLayer(
         kernel_size, d_model, d_qcoeff, num_heads, d_feedforward
     ).to(device=device)
 
@@ -80,7 +80,7 @@ def test_DctTransformer(
     sample_image = torch.randn(img_shape, dtype=torch.float32).to(device=device)
     sample_coeff = torch.randn(qct_shape, dtype=torch.float32).to(device=device)
 
-    transformer = LFDTEncoder(
+    transformer = SpectralEncoder(
         in_features, num_encoders, kernel_size, d_model, d_qcoeff, num_heads,
         d_feedforward
     ).to(device=device)
