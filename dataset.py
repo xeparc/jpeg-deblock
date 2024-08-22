@@ -63,15 +63,43 @@ class ExtractSubpatches:
 
 class  ToDCTTensor:
 
-    def __init__(self, y_mean, y_std, c_mean, c_std, eps=1e-5):
-        assert y_mean.shape == (8,8)
-        assert y_mean.shape == y_std.shape == c_mean.shape == c_std.shape
-        self.y_mean = torch.as_tensor(y_mean).float()
-        self.c_mean = torch.as_tensor(c_mean).float()
-        self.y_std = torch.as_tensor(y_std).float() + eps
-        self.c_std = torch.as_tensor(c_std).float() + eps
-        self.skip_y = torch.all(self.y_mean == 0.0) and torch.all(self.y_std == 1.0)
-        self.skip_c = torch.all(self.c_mean == 0.0) and torch.all(self.c_std == 1.0)
+    def __init__(self,
+                 luma_mean=None, luma_std=None,
+                 chroma_mean=None, chroma_std=None,
+        ):
+        if luma_mean is not None:
+            assert luma_mean.shape == (8,8)
+            self.luma_mean = torch.as_tensor(luma_mean).float()
+        else:
+            self.luma_mean = torch.zeros((8,8), dtype=torch.float32)
+        
+        if luma_std is not None:
+            assert luma_std.shape == (8,8)
+            self.luma_std = torch.as_tensor(luma_std).float()
+        else:
+            self.luma_std = torch.ones((8,8), dtype=torch.float32)
+
+        if luma_mean is None and luma_std is None:
+            self.skip_luma = True
+        else:
+            self.skip_luma = False
+
+        if chroma_mean is not None:
+            assert chroma_mean.shape == (8,8)
+            self.chroma_mean = torch.as_tensor(chroma_mean).float()
+        else:
+            self.chroma_mean = torch.zeros((8,8), dtype=torch.float32)
+        
+        if chroma_std is not None:
+            assert chroma_std.shape == (8,8)
+            self.chroma_std = torch.as_tensor(chroma_std).float()
+        else:
+            self.chroma_std = torch.ones((8,8), dtype=torch.float32)
+
+        if chroma_mean is None and chroma_std is None:
+            self.skip_chroma = True
+        else:
+            self.skip_chroma = False
 
     def __call__(self, dct: np.ndarray, chroma: bool):
         assert dct.ndim >= 4
@@ -79,15 +107,15 @@ class  ToDCTTensor:
         out_shape = dct.shape[:-2] + (64,)
         dct = torch.from_numpy(dct)
         if chroma:
-            if self.skip_c:
+            if self.skip_chroma:
                 res = dct
             else:
-                res = (dct - self.c_mean) / self.c_std
+                res = (dct - self.chroma_mean) / self.chroma_std
         else:
-            if self.skip_y:
+            if self.skip_luma:
                 res = dct
             else:
-                res = (dct - self.y_mean) / self.y_std
+                res = (dct - self.luma_mean) / self.luma_std
         return res.view(out_shape).permute(2,0,1).contiguous()
 
 class AddCheckerboardChannel:

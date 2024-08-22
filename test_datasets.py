@@ -12,6 +12,7 @@ from jpegutils import (
     upsample_chrominance,
     ycc2rgb,
 )
+from models import InverseDCT
 
 TEST_DATASET_DIR = "data/Live1-Classic5/live1/refimgs/"
 LEN_DATASET = 29
@@ -29,18 +30,13 @@ class TestQuantizedDataset:
         with open(DCT_STATS_FILEPATH, mode="r") as f:
             stats = json.load(f)
             self.transform_dct1 = ToDCTTensor(
-                y_mean=np.asarray(stats["dct_Y_mean"]),
-                y_std=np.asarray(stats["dct_Y_std"]),
-                c_mean=np.asarray(stats["dct_C_mean"]),
-                c_std=np.asarray(stats["dct_C_std"])
+                luma_mean=  np.asarray(stats["dct_Y_mean"]),
+                luma_std=   np.asarray(stats["dct_Y_std"]),
+                chroma_mean=np.asarray(stats["dct_C_mean"]),
+                chroma_std= np.asarray(stats["dct_C_std"])
             )
 
-        self.transform_dct2 = ToDCTTensor(
-            y_mean=np.zeros((8,8), dtype=np.float32),
-            y_std=np.ones((8,8), dtype=np.float32),
-            c_mean=np.zeros((8,8), dtype=np.float32),
-            c_std=np.ones((8,8), dtype=np.float32)
-        )
+        self.transform_dct2 = ToDCTTensor()
 
         self.default_kwargs = dict(
             image_dirs = self.images_path,
@@ -266,3 +262,58 @@ class TestQuantizedDataset:
                 torch.from_numpy(decoded_rgb).permute(2,0,1),
                 os.path.join(DATAPOINTS_OUTPUT_DIR, name + "-lq_dct.png")
             )
+
+    @pytest.mark.parametrize("subsample", ("444", "422", "420"))
+    def test_normalization(self, subsample):
+        self.init()
+
+        kwargs = self.default_kwargs.copy()
+        kwargs.update(transform_dct=self.transform_dct1,
+                      use_lq_ycc=True, use_hq_ycc=True,
+                      use_lq_dct=True, use_hq_dct=True, subsample=subsample)
+
+        dataset = DatasetQuantizedJPEG(**kwargs)
+        idct = InverseDCT(
+            luma_mean=      self.transform_dct1.luma_mean,
+            luma_std=       self.transform_dct1.luma_std,
+            chroma_mean=    self.transform_dct1.chroma_mean,
+            chroma_std=     self.transform_dct1.chroma_std
+        )
+
+        for i in range(LEN_DATASET):
+            point = dataset[i]
+            lq_planes = upsample_chrominance(
+                [point["lq_y"][0].numpy(),
+                 point["lq_cb"][0].numpy(),
+                 point["lq_cr"][0].numpy()], subsample=subsample
+            )
+            hq_planes = upsample_chrominance(
+                [point["hq_y"][0].numpy(),
+                 point["hq_cb"][0].numpy(),
+                 point["hq_cr"][0].numpy()], subsample=subsample
+            )
+    
+            lq_dct_y  = point["lq_dct_y"]
+            lq_dct_cb = point["lq_dct_cb"]
+            lq_dct_cr = point["lq_dct_cr"]
+
+            hq_dct_y  = point["hq_dct_y"]
+            hq_dct_cb = point["hq_dct_cb"]
+            hq_dct_cr = point["hq_dct_cr"]
+
+            lq_y  = idct(lq_dct_y.unsqueeze(0), chroma=False)[0,0].numpy()
+            lq_cb = idct(lq_dct_cb.unsqueeze(0), chroma=True)[0,0].numpy()
+            lq_cr = idct(lq_dct_cr.unsqueeze(0), chroma=True)[0,0].numpy()
+
+            hq_y  = idct(hq_dct_y.unsqueeze(0), chroma=False)[0,0].numpy()
+            hq_cb = idct(hq_dct_cb.unsqueeze(0), chroma=True)[0,0].numpy()
+            hq_cr = idct(hq_dct_cr.unsqueeze(0), chroma=True)[0,0].numpy()
+
+            lq_ycc = upsample_chrominance([lq_y, lq_cb, lq_cr], subsample=subsample)
+            hq_ycc = upsample_chrominance([hq_y, hq_cb, hq_cr], subsample=subsample)
+
+            for x, y in zip(lq_planes, lq_ycc):
+                assert np.all(np.isclose(x, y, atol=1e-3))
+
+            for x, y in zip(hq_planes, hq_ycc):
+                assert np.all(np.isclose(x, y, atol=1e-3))

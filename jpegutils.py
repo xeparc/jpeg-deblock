@@ -155,7 +155,6 @@ def rgb2ycc(rgb: np.ndarray) -> np.ndarray:
         ycc = np.clip(ycc, a_min=0.0, a_max=1.0)
     elif indtype == np.uint8:
         ycc = y + np.array([0, 128, 128], dtype=np.float32)
-        print(ycc.max(), ycc.min())
         ycc = np.clip(np.round(ycc), a_min=0, a_max=255)
     return ycc.astype(indtype)
 
@@ -197,10 +196,11 @@ def subsample_chrominance(ycc: np.ndarray, subsample: str) -> List[np.ndarray]:
 
 def upsample_chrominance(ycc: List[np.ndarray], subsample: str) -> List[np.ndarray]:
     Y, Cb, Cr = ycc
+    crop_h, crop_w = Y.shape
     h_repeat, w_repeat = SUBSAMPLE_FACTORS[subsample]
     cb = np.repeat(np.repeat(Cb, h_repeat, axis=0), w_repeat, axis=1)
     cr = np.repeat(np.repeat(Cr, h_repeat, axis=0), w_repeat, axis=1)
-    return [Y, cb, cr]
+    return [Y, cb[:crop_h, :crop_w], cr[:crop_h, :crop_w] ]
 
 
 def to_data_units(ycc: List[np.ndarray]) -> List[np.ndarray]:

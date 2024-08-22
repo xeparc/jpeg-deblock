@@ -1,5 +1,16 @@
+import os
 import numpy as np
 
+
+IMAGE_EXTENSIONS = "jpg jpeg bmp png tif tiff".split()
+
+def is_image(filepath):
+    name = os.path.basename(filepath)
+    try:
+        extension = name.split('.')[-1]
+        return extension in IMAGE_EXTENSIONS
+    except:
+        return False
 
 class RunningMeanStd:
 
