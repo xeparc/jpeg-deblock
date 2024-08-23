@@ -12,7 +12,7 @@ def is_image(filepath):
     except:
         return False
 
-class RunningMeanStd:
+class RunningStats:
 
     def __init__(self):
         self.count = 0
@@ -28,6 +28,9 @@ class RunningMeanStd:
         self._mean += delta / self.count
         delta2 = x - self._mean
         self._var += delta * delta2
+
+    def reset(self):
+        self.count = 0
 
     @property
     def mean(self):
@@ -46,3 +49,32 @@ class RunningMeanStd:
         if self.count < 2:
             return None
         return self._var / self.count
+
+
+class CombinedLoss:
+
+    def __init__(self, criterion, gamma, luma_weight, chroma_weight):
+        self.criterion = criterion
+        self.gamma = gamma
+        self.luma_weight = luma_weight
+        self.chroma_weight = chroma_weight
+
+    def __call__(self, predictions: dict, targets: dict):
+        Y_loss =  self.criterion(predictions["Y"], targets["Y"])
+        Cb_loss = self.criterion(predictions["Cb"], targets["Cb"])
+        Cr_loss = self.criterion(predictions["Cr"], targets["Cr"])
+
+        spectral_loss = (self.luma_weight * Y_loss +
+                         self.chroma_weight * Cb_loss +
+                         self.chroma_weight * Cr_loss)
+        chroma_loss = self.criterion(predictions["final"], targets["final"])
+        total_loss = self.gamma * spectral_loss + (1 - self.gamma) * chroma_loss
+
+        return {
+            "Y":        self.luma_weight * Y_loss,
+            "Cb":       self.chroma_weight * Cb_loss,
+            "Cr":       self.chroma_weight * Cr_loss,
+            "spectral": spectral_loss,
+            "chroma":   chroma_loss
+        }
+

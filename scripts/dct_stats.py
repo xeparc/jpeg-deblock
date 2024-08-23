@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 import context
 from jpegutils import JPEGTransforms
-from utils import RunningMeanStd
+from utils import RunningStats
 
 
 if __name__ == "__main__":
@@ -47,8 +47,8 @@ if __name__ == "__main__":
                     image_paths.append(fullpath)
 
     iterable = tqdm(image_paths) if not args.verbose else image_paths
-    estimator_Y = RunningMeanStd()
-    estimator_C = RunningMeanStd()
+    estimator_Y = RunningStats()
+    estimator_C = RunningStats()
 
     # Calculate DCT coefficients mean and std
     for impath in iterable:
