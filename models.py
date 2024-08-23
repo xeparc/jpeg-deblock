@@ -1,3 +1,5 @@
+from typing import List
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -345,7 +347,6 @@ class SpectralEncoderLayer(nn.Module):
         return z4.permute(0, 3, 1, 2)
 
 
-
 class SpectralEncoder(nn.Module):
 
     def __init__(self, in_features=64, num_layers=4, window_size=7, d_model=128,
@@ -436,19 +437,6 @@ class ConvertRGBToYcc(torch.nn.Module):
         yuv = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, x.transpose(0,1))
         yuv = yuv.transpose(0,1) + self.offset.view(1, 3, 1, 1)
         return yuv.clip(min=0.0, max=1.0)
-
-
-class ChromeUpsample(torch.nn.Module):
-
-    def __init__(self, subsample):
-        super().__init__()
-        self.repeats = SUBSAMPLE_FACTORS[subsample]
-
-    def forward(self, x):
-        # x.shape = (B, C, H, W)
-        y = torch.repeat_interleave(x, self.repeats[0], dim=2)
-        y = torch.repeat_interleave(y, self.repeats[1], dim=3)
-        return y
 
 
 class ChromaCrop(torch.nn.Module):
@@ -542,3 +530,74 @@ class SpectralNet(nn.Module):
         return x
 
 
+class ConvNeXtBlock(nn.Module):
+
+    def __init__(self, in_channels: int, mid_channels: int, kernel_size: int):
+        super().__init__()
+
+        self.in_channels  = in_channels
+        self.mid_channels = mid_channels
+        self.out_channels = in_channels
+        self.kernel_size  = kernel_size
+
+        self.dwconv = nn.Conv2d(
+            in_channels=    in_channels,
+            out_channels=   in_channels,
+            kernel_size=    kernel_size,
+            padding=        "same",
+            groups=         in_channels
+        )
+        self.norm = nn.LayerNorm(in_channels, eps=1e-6)
+        self.pwconv1 = nn.Linear(in_channels, mid_channels)
+        self.activation = nn.GELU()
+        self.pwconv2 = nn.Linear(mid_channels, in_channels)
+
+    def forward(self, x):
+        # x.shape == (B,C,H,W)
+        z = x
+        y = self.dwconv(z).permute(0,2,3,1)     # (B, H, W, C)
+        y = self.norm(y)
+        y = self.pwconv1(y)
+        y = self.activation(y)
+        y = self.pwconv2(y).permute(0,3,1,2)    # (B, C, H, W)
+        return x + y
+
+
+class ChromaNet(nn.Module):
+
+    def __init__(
+            self,
+            stages: List[ConvNeXtBlock],
+            output_transform: nn.Module,
+            in_channels: int = 3,
+            out_channels: int = 3,
+            kernel_size: int = 3
+    ):
+        super().__init__()
+
+        self.in_channels =  in_channels
+        self.out_channels = out_channels
+        self.kernel_size  = kernel_size
+        self.output_transform = output_transform
+
+        self.stem = nn.Conv2d(
+            in_channels=    in_channels,
+            out_channels=   stages[0].in_channels,
+            kernel_size=    kernel_size,
+            padding=        "same",
+            stride=         1
+        )
+        self.body = nn.Sequential(*stages)
+        self.leaf = nn.Conv2d(
+            in_channels=    stages[-1].out_channels,
+            out_channels=   out_channels,
+            kernel_size=    kernel_size,
+            padding=        "same",
+            stride=         1
+        )
+
+    def forward(self, x):
+        y = self.stem(x)
+        y = self.body(y)
+        y = self.leaf(y)
+        return self.output_transform(y)
