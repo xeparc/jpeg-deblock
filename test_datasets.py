@@ -6,13 +6,14 @@ import pytest
 import torch
 import torchvision
 
-from dataset import DatasetQuantizedJPEG, ToDCTTensor
+from dataset import DatasetQuantizedJPEG, ToDCTTensor, ToQTTensor
 from jpegutils import (
     JPEGTransforms,
     upsample_chrominance,
     ycc2rgb,
 )
 from models import InverseDCT
+
 
 TEST_DATASET_DIR = "data/Live1-Classic5/live1/refimgs/"
 LEN_DATASET = 29
@@ -38,6 +39,8 @@ class TestQuantizedDataset:
 
         self.transform_dct2 = ToDCTTensor()
 
+        self.transform_qt = ToQTTensor(invert=False)
+
         self.default_kwargs = dict(
             image_dirs = self.images_path,
             patch_size = 64,
@@ -47,13 +50,14 @@ class TestQuantizedDataset:
             target_quality = 100,
             num_patches = 1,
             transform_dct = self.transform_dct2,
+            transform_qt = self.transform_qt,
             use_lq_rgb = False,
             use_lq_ycc = False,
             use_lq_dct = True,
             use_hq_rgb = True,
             use_hq_ycc = True,
             use_hq_dct = False,
-            use_qtables = True
+            use_qt = True
         )
         self.disable_use_keys = dict(
             use_lq_rgb  = False,
@@ -62,7 +66,7 @@ class TestQuantizedDataset:
             use_hq_rgb  = False,
             use_hq_ycc  = False,
             use_hq_dct  = False,
-            use_qtables = False
+            use_qt = False
         )
         self.default_keys = [
             "filepath",
@@ -164,6 +168,21 @@ class TestQuantizedDataset:
         assert point["hq_dct_y"].shape[0] == 64
         assert point["hq_dct_cb"].shape[0] == 64
         assert point["hq_dct_cr"].shape[0] == 64
+
+    @pytest.mark.parametrize("invert", (True, False))
+    def test_use_qt(self, invert):
+        self.init()
+        self.default_kwargs.update(self.disable_use_keys)
+        self.default_kwargs["use_qt"] = True
+        self.default_kwargs["transform_qt"] = ToQTTensor(invert)
+        dataset = DatasetQuantizedJPEG(**self.default_kwargs)
+        point = dataset[0]
+
+        assert "qt_y" in point and "qt_c" in point
+        assert point["qt_y"].dtype == torch.float32
+        assert point["qt_c"].dtype == torch.float32
+        assert 0 <= point["qt_c"].min() <= point["qt_c"].max() <= 1.0
+
 
     def test_save_datapoint(self):
         self.init()

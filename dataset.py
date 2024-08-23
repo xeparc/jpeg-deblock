@@ -117,6 +117,20 @@ class  ToDCTTensor:
             else:
                 res = (dct - self.luma_mean) / self.luma_std
         return res.view(out_shape).permute(2,0,1).contiguous()
+    
+
+class ToQTTensor(nn.Module):
+
+    def __init__(self, invert=False):
+        self.invert = invert
+
+    def __call__(self, qtable: np.ndarray):
+        x = torch.as_tensor((qtable.astype(np.float32) - 1) / 254).ravel()
+        if self.invert:
+            return 1.0 - x
+        else:
+            return x
+
 
 class AddCheckerboardChannel:
     """Adds a channel with 8x8 checkerboard pattern to image. This simulates
@@ -248,13 +262,14 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             # normalize_rgb: bool,
             # normalize_ycc: bool,
             transform_dct: Callable,
+            transform_qt: Callable,
             use_lq_rgb: bool,
             use_lq_ycc: bool,
             use_lq_dct: bool,
             use_hq_rgb: bool,
             use_hq_ycc: bool,
             use_hq_dct: bool,
-            use_qtables: bool,
+            use_qt: bool,
             seed = None,
             cached: bool = False
     ):
@@ -276,13 +291,14 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         self.transform_rgb = torchvision.transforms.ToTensor()
         self.transform_ycc = torchvision.transforms.ToTensor()
         self.transform_dct = transform_dct
+        self.transform_qt  = transform_qt
         self.use_lq_rgb = use_lq_rgb
         self.use_lq_ycc = use_lq_ycc
         self.use_lq_dct = use_lq_dct
         self.use_hq_rgb = use_hq_rgb
         self.use_hq_ycc = use_hq_ycc
         self.use_hq_dct = use_hq_dct
-        self.use_qtables = use_qtables
+        self.use_qt = use_qt
         self.seed = seed
         self.cached = cached
 
@@ -312,6 +328,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         transform_rgb = self.transform_rgb
         transform_ycc = self.transform_ycc
         transform_dct = self.transform_dct
+        transform_qt  = self.transform_qt
         result = defaultdict(list)
 
         # Extract patches
@@ -345,9 +362,11 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             quantizedT = JPEGTransforms(quantized_rgb)
 
             # Quantization tables
-            if self.use_qtables:
-                result["qt_y"].append(quantizedT.get_y_qtable(quality))
-                result["qt_c"].append(quantizedT.get_c_qtable(quality))
+            if self.use_qt:
+                y_qt = quantizedT.get_y_qtable(quality)
+                c_qt = quantizedT.get_c_qtable(quality)
+                result["qt_y"].append(transform_qt(y_qt))
+                result["qt_c"].append(transform_qt(c_qt))
 
             # Low quality RGB
             if self.use_lq_rgb:
