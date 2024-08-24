@@ -600,4 +600,4 @@ class ChromaNet(nn.Module):
         y = self.stem(x)
         y = self.body(y)
         y = self.leaf(y)
-        return self.output_transform(y)
+        return x + self.output_transform(y)
