@@ -44,7 +44,7 @@ class TestQuantizedDataset:
         self.default_kwargs = dict(
             image_dirs = self.images_path,
             patch_size = 64,
-            subsample = "420",
+            subsample = 420,
             min_quality = 10,
             max_quality = 80,
             target_quality = 100,
@@ -282,7 +282,7 @@ class TestQuantizedDataset:
                 os.path.join(DATAPOINTS_OUTPUT_DIR, name + "-lq_dct.png")
             )
 
-    @pytest.mark.parametrize("subsample", ("444", "422", "420"))
+    @pytest.mark.parametrize("subsample", (444, 422, 420))
     def test_normalization(self, subsample):
         self.init()
 
@@ -311,7 +311,7 @@ class TestQuantizedDataset:
                  point["hq_cb"][0].numpy(),
                  point["hq_cr"][0].numpy()], subsample=subsample
             )
-    
+
             lq_dct_y  = point["lq_dct_y"]
             lq_dct_cb = point["lq_dct_cb"]
             lq_dct_cr = point["lq_dct_cr"]

@@ -72,7 +72,7 @@ class  ToDCTTensor:
             self.luma_mean = torch.as_tensor(luma_mean).float()
         else:
             self.luma_mean = torch.zeros((8,8), dtype=torch.float32)
-        
+
         if luma_std is not None:
             assert luma_std.shape == (8,8)
             self.luma_std = torch.as_tensor(luma_std).float()
@@ -89,7 +89,7 @@ class  ToDCTTensor:
             self.chroma_mean = torch.as_tensor(chroma_mean).float()
         else:
             self.chroma_mean = torch.zeros((8,8), dtype=torch.float32)
-        
+
         if chroma_std is not None:
             assert chroma_std.shape == (8,8)
             self.chroma_std = torch.as_tensor(chroma_std).float()
@@ -102,7 +102,7 @@ class  ToDCTTensor:
             self.skip_chroma = False
 
     def __call__(self, dct: np.ndarray, chroma: bool):
-        assert dct.ndim >= 4
+        assert dct.ndim == 4
         assert dct.shape[2] == dct.shape[3] == 8
         out_shape = dct.shape[:-2] + (64,)
         dct = torch.from_numpy(dct)
@@ -117,7 +117,7 @@ class  ToDCTTensor:
             else:
                 res = (dct - self.luma_mean) / self.luma_std
         return res.view(out_shape).permute(2,0,1).contiguous()
-    
+
 
 class ToQTTensor(nn.Module):
 
@@ -258,7 +258,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             min_quality: int,
             max_quality: int,
             target_quality: int,
-            subsample: str,
+            subsample: int,
             # normalize_rgb: bool,
             # normalize_ycc: bool,
             transform_dct: Callable,
@@ -271,13 +271,14 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             use_hq_dct: bool,
             use_qt: bool,
             seed = None,
+            device = "cpu",
             cached: bool = False
     ):
 
         if isinstance(image_dirs, str):
             image_dirs = (image_dirs,)
 
-        assert subsample in "444 422 420 411 440".split()
+        assert subsample in (444, 422, 420, 411, 440)
         assert 1 <= min_quality <= max_quality <= 100
         assert 1 <= target_quality <= 100
         assert 1 <= patch_size
@@ -300,6 +301,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         self.use_hq_dct = use_hq_dct
         self.use_qt = use_qt
         self.seed = seed
+        self.device = torch.device(device)
         self.cached = cached
 
         self.image_paths = []
@@ -386,10 +388,11 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
 
         if self.num_patches == 1:
             return {k: v[0] for k,v in result.items()}
-        return result
+        else:
+            return result
 
     @staticmethod
-    def collate_fn(batch):
+    def collate_fn(batch, device):
         temp = {}
         for item in batch:
             for k, v in item.items():
@@ -400,9 +403,10 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         res = {}
         for k, collection in temp.items():
             if isinstance(collection[0], torch.Tensor):
-                res[k] = torch.stack(collection, dim=0)
+                res[k] = torch.stack(collection, dim=0).to(device=device)
             else:
                 res[k] = collection
+        return res
 
 
 def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10)):
