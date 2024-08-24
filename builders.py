@@ -1,4 +1,5 @@
 import json
+import functools
 import logging
 import os
 
@@ -61,7 +62,7 @@ def build_spectral_net(config):
                 kernel_size=        1,
                 stride=             1,
                 padding=            0,
-                dilation=           0,
+                dilation=           1,
                 bias=               False
 
             )
@@ -76,13 +77,13 @@ def build_spectral_net(config):
         chroma_mean=    stats["chroma_mean"],
         chroma_std=     stats["chroma_std"]
     )
-    blocks.append(idct)
+    # blocks.append(idct)
 
-    return SpectralNet(blocks)
+    return SpectralNet(blocks, output_transform=idct)
 
 
 def build_chroma_net(config):
-    
+
     depths =    config.MODEL.CHROMA.DEPTHS
     channels =  config.MODEL.CHROMA.CHANNELS
 
@@ -96,18 +97,19 @@ def build_chroma_net(config):
                 kernel_size=    config.MODEL.CHROMA.BODY_KERNEL_SIZE
             )
             body.append(block)
-    
+
     if config.MODEL.RGB_OUTPUT:
-        out_transform = ConvertYccToRGB
+        out_transform = ConvertYccToRGB()
     else:
-        out_transform = torch.nn.Identity
+        out_transform = torch.nn.Identity()
 
     net = ChromaNet(
         stages=             body,
         output_transform=   out_transform,
         in_channels=        config.MODEL.CHROMA.IN_CHANNELS,
         out_channels=       config.MODEL.CHROMA.OUT_CHANNELS,
-        kernel_size=        config.MODEL.CHROMA.STEM_KERNEL_SIZE,
+        kernel_size=        config.MODEL.CHROMA.BODY_KERNEL_SIZE,
+        skip=               config.MODEL.CHROMA.SKIP
     )
 
     return net
@@ -127,7 +129,7 @@ def build_dataloader(config, kind: str):
     elif kind == "test":
         image_dirs = config.DATA.LOCATIONS.TEST
         num_patches = 1
-        batch_size = config.TEST.BATCH_SIZE 
+        batch_size = config.TEST.BATCH_SIZE
 
     if config.DATA.NORMALIZE_DCT:
         coeffs = get_dct_stats(config)
@@ -157,14 +159,16 @@ def build_dataloader(config, kind: str):
         seed=               config.SEED
     )
 
+    device = torch.device(config.TRAIN.DEVICE)
+
     dataloader = torch.utils.data.DataLoader(
         dataset             = dataset,
         batch_size          = batch_size,
         shuffle             = config.DATA.SHUFFLE,
         num_workers         = config.DATA.NUM_WORKERS,
-        collate_fn          = dataset.collate_fn,
+        collate_fn          = functools.partial(dataset.collate_fn, device=device),
         pin_memory          = config.DATA.PIN_MEMORY,
-        pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE
+        pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE if config.DATA.PIN_MEMORY else ''
     )
 
     return dataloader
@@ -181,9 +185,10 @@ def build_criterion(config):
 
     return CombinedLoss(
         criterion=      criterion,
-        gamma=          config.LOSS.GAMMA,
         luma_weight=    config.LOSS.LUMA_WEIGHT,
-        chroma_weight=  config.LOSS.CHROMA_WEIGHT
+        chroma_weight=  config.LOSS.CHROMA_WEIGHT,
+        alpha=          config.LOSS.ALPHA,
+        beta=           config.LOSS.BETA
     )
 
 
@@ -192,15 +197,15 @@ def build_optimizer(config, spectral_params, chroma_params):
     name = config.TRAIN.OPTIMIZER.NAME
     kwargs = {k:v for k,v in config.TRAIN.OPTIMIZER.KWARGS}
 
-    if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
-        lr = config.TRAIN.WARMUP_LR
-    else:
-        lr = config.TRAIN.BASE_LR
+    # if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
+    #     lr = config.TRAIN.WARMUP_LR
+    # else:
+    #     lr = config.TRAIN.BASE_LR
 
     if name == "adamw":
         optim = torch.optim.AdamW(
             params=[{"params": spectral_params, "params": chroma_params}],
-            lr=lr,
+            lr=config.TRAIN.BASE_LR,
             **kwargs
         )
     return optim
@@ -228,14 +233,17 @@ def build_lr_scheduler(config, optimizer):
         raise ValueError
 
     if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
-        warmup_scheduler = torch.optim.lr_scheduler.ConstantLR(
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
-            factor=1.0,
+            start_factor=config.TRAIN.WARMUP_LR / (config.TRAIN.BASE_LR),
+            end_factor=1.0,
             total_iters=config.TRAIN.WARMUP_ITERATIONS
         )
-        return torch.optim.lr_scheduler.ChainedScheduler([
-            warmup_scheduler, main_scheduler
-        ])
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer=optimizer,
+            schedulers=[warmup_scheduler, main_scheduler],
+            milestones=[config.TRAIN.WARMUP_ITERATIONS]
+        )
     else:
         return main_scheduler
 
@@ -249,10 +257,17 @@ def build_logger(config, name="train"):
     fmt = '[%(asctime)s %(name)s] (%(filename)s %(lineno)d): %(levelname)s %(message)s'
 
     # create file handlers
-    savepath = os.path.join(config.LOGGING.DIR, "log.txt")
+    savepath = os.path.join(config.LOGGING.DIR, config.TAG, "log.txt")
+    fresh = False
+    if not os.path.exists(savepath):
+        os.makedirs(os.path.dirname(savepath), exist_ok=True)
+        open(savepath, mode='w').close()
+        fresh = True
     file_handler = logging.FileHandler(savepath, mode='a')
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
     logger.addHandler(file_handler)
+    if not fresh:
+        logger.info("\t\tRESTART\n\n")
 
     return logger

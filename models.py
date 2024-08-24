@@ -335,7 +335,7 @@ class SpectralEncoderLayer(nn.Module):
 
         E = self.d_model
         N, C, H, W = x.shape
-        qcoeff = torch.tile(qcoeff.view(1, 1, 1, self.d_qcoeff), (1, H, W, 1))
+        qcoeff = torch.tile(qcoeff.view(N, 1, 1, self.d_qcoeff), (1, H, W, 1))
 
         xnorm = self.layernorm1(x.permute(0, 2, 3, 1))          # (N, H, W, E)
         z0 = self.local_attention(xnorm.permute(0, 3, 1, 2))    # (N, E, H, W)
@@ -510,9 +510,10 @@ class InverseDCT(torch.nn.Module):
 
 class SpectralNet(nn.Module):
 
-    def __init__(self, blocks):
+    def __init__(self, blocks: List[nn.Module], output_transform: nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
+        self.output_transform = output_transform
 
     def forward(self,
                 dct_tensor: torch.FloatTensor,
@@ -527,7 +528,9 @@ class SpectralNet(nn.Module):
                 x = block(x)
             elif isinstance(block, InverseDCT):
                 x = block(x, chroma)
-        return x
+        out = self.output_transform(dct_tensor + x, chroma)
+        return out
+        # return x
 
 
 class ConvNeXtBlock(nn.Module):
@@ -571,7 +574,8 @@ class ChromaNet(nn.Module):
             output_transform: nn.Module,
             in_channels: int = 3,
             out_channels: int = 3,
-            kernel_size: int = 3
+            kernel_size: int = 3,
+            skip = False
     ):
         super().__init__()
 
@@ -579,25 +583,42 @@ class ChromaNet(nn.Module):
         self.out_channels = out_channels
         self.kernel_size  = kernel_size
         self.output_transform = output_transform
+        self.skip = skip
 
-        self.stem = nn.Conv2d(
-            in_channels=    in_channels,
-            out_channels=   stages[0].in_channels,
-            kernel_size=    kernel_size,
-            padding=        "same",
-            stride=         1
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, stages[0].in_channels, kernel_size, padding="same"),
+            LayerNorm2D(stages[0].in_channels)
         )
         self.body = nn.Sequential(*stages)
-        self.leaf = nn.Conv2d(
-            in_channels=    stages[-1].out_channels,
-            out_channels=   out_channels,
-            kernel_size=    kernel_size,
-            padding=        "same",
-            stride=         1
-        )
+        linear = []
+        for i in range(len(stages)):
+            in_c = stages[i].out_channels
+            out_c = out_channels if i == len(stages) - 1 else stages[i+1].in_channels
+            layer = nn.Sequential(
+                LayerNorm2D(in_c),
+                nn.Conv2d(in_c, out_c, 1, bias=False))
+            linear.append(layer)
+        self.linear = nn.ModuleList(linear)
+
 
     def forward(self, x):
-        y = self.stem(x)
-        y = self.body(y)
-        y = self.leaf(y)
-        return x + self.output_transform(y)
+        if self.skip:
+            return self.output_transform(x)
+        else:
+            y = self.stem(x)
+            for i in range(len(self.body)):
+                y = self.body[i](y)
+                y = self.linear[i](y)
+            return self.output_transform(x + y)
+
+
+class LayerNorm2D(nn.Module):
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        # x.shape == (N, C, H, W)
+        y = self.norm(x.permute(0,2,3,1))
+        return y.permute(0, 3, 1, 2)
