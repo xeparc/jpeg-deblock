@@ -1,10 +1,14 @@
 # Custom
 data/
+logs/
+checkpoints/
 models/
 literature/
 *.pdf
 *.jpg
 *.png
+*.DS_Store
+*.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
