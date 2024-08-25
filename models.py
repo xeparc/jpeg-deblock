@@ -1,3 +1,4 @@
+import math
 from typing import List
 
 import numpy as np
@@ -228,9 +229,9 @@ class Local2DAttentionLayer(nn.Module):
         # Local neighborhood patch unfold
         p = kernel_size // 2
         self.unfold = nn.Unfold(kernel_size, padding=(p, p), stride=1)
-        # self.project_q = nn.LazyLinear(out_features=embed_dim, bias=True)
-        # self.project_k = nn.LazyLinear(out_features=embed_dim, bias=True)
-        # self.project_v = nn.LazyLinear(out_features=embed_dim, bias=True)
+        # self.project_q = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
+        # self.project_k = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
+        # self.project_v = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
 
         conv_kwargs = dict(in_channels=embed_dim, out_channels=embed_dim,
                            kernel_size=1, stride=1, padding=0, bias=add_bias_kqv)
@@ -238,6 +239,12 @@ class Local2DAttentionLayer(nn.Module):
         self.project_q = nn.Conv2d(**conv_kwargs)
         self.project_k = nn.Conv2d(**conv_kwargs)
         self.project_v = nn.Conv2d(**conv_kwargs)
+
+        # Since no nonlinearity follows the projection matrices, we'll
+        # initialize them with Xavier's method
+        torch.nn.init.xavier_uniform_(self.project_q.weight, gain=1.0)
+        torch.nn.init.xavier_uniform_(self.project_k.weight, gain=1.0)
+        torch.nn.init.xavier_uniform_(self.project_v.weight, gain=1.0)
 
         # Relative positional encodings bias table
         self.relative_positional_bias = nn.Parameter(
@@ -274,14 +281,14 @@ class Local2DAttentionLayer(nn.Module):
         Q = Q.permute(0,4,1,3,2)
         V = V.permute(0,4,1,3,2)
 
-        attn_weights = Q @ K.transpose(3, 4)
+        attn_weights = Q @ K.transpose(3, 4) / math.sqrt(self.embed_dim)
         # attn_weights.shape == (N, L, Nh, 1, P)
         attn_scores = attn_weights + self.relative_positional_bias.unsqueeze(0)
         attn = nn.functional.softmax(attn_scores, dim=-1)
 
         # (N, L, Nh, 1, P) @ (N, L, Nh, P, Hd) -> (N, L, Nh, 1, Hd)
         out = (attn @ V).squeeze(dim=3)     # (N, L, Nh, Hd)
-        return out.reshape(N, H, W, E).permute(0,3,1,2)
+        return out.reshape(N, H, W, E).permute(0,3,1,2), attn_scores
 
 
 class SpectralEncoderLayer(nn.Module):
@@ -333,7 +340,8 @@ class SpectralEncoderLayer(nn.Module):
         qcoeff = torch.tile(qcoeff.view(N, 1, 1, self.d_qcoeff), (1, H, W, 1))
 
         xnorm = self.layernorm1(x.permute(0, 2, 3, 1))          # (N, H, W, E)
-        z0 = self.local_attention(xnorm.permute(0, 3, 1, 2))    # (N, E, H, W)
+        z0, _ = self.local_attention(xnorm.permute(0, 3, 1, 2))
+        # (N, E, H, W)
         z0 = z0.permute(0, 2, 3, 1)                             # (N, H, W, E)
         z1 = self.bilinear(z0, qcoeff)                          # (N, H, W, E)
         z2 = z1 + x.permute(0, 2, 3, 1)

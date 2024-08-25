@@ -204,7 +204,7 @@ def build_optimizer(config, spectral_params, chroma_params):
 
     if name == "adamw":
         optim = torch.optim.AdamW(
-            params=[{"params": spectral_params, "params": chroma_params}],
+            params=[{"params": spectral_params}, {"params": chroma_params}],
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )

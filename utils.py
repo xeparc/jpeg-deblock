@@ -101,10 +101,11 @@ def load_checkpoint(state, config, logger):
 
 
 def save_checkpoint(state, config, logger):
+    i = state["iteration"]
     savepath = os.path.join(
         config.TRAIN.CHECKPOINT_DIR,
         config.TAG,
-        f'checkpoint_{iter}.pth'
+        f'checkpoint_{i}.pth'
     )
     os.makedirs(os.path.dirname(savepath), exist_ok=True)
     logger.info(f"{savepath} saving......")
