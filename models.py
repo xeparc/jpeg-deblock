@@ -238,12 +238,7 @@ class Local2DAttentionLayer(nn.Module):
         self.project_q = nn.Conv2d(**conv_kwargs)
         self.project_k = nn.Conv2d(**conv_kwargs)
         self.project_v = nn.Conv2d(**conv_kwargs)
-        # Multihead attention
-        self.multihead_attn = nn.MultiheadAttention(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            batch_first=True
-        )
+
         # Relative positional encodings bias table
         self.relative_positional_bias = nn.Parameter(
             torch.zeros((num_heads, 1, kernel_size ** 2), dtype=torch.float32)
@@ -530,7 +525,6 @@ class SpectralNet(nn.Module):
                 x = block(x, chroma)
         out = self.output_transform(dct_tensor + x, chroma)
         return out
-        # return x
 
 
 class ConvNeXtBlock(nn.Module):

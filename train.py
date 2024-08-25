@@ -125,7 +125,7 @@ def train_loop(
                     error_if_nonfinite=True
                 )
                 chroma_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    spectral_net.parameters(),
+                    chroma_net.parameters(),
                     max_norm = config.TRAIN.CLIP_GRAD,
                     error_if_nonfinite=True
                 )
@@ -154,9 +154,10 @@ def train_loop(
                     "chroma": chroma_net.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "lr_scheduler": lr_scheduler.state_dict(),
+                    "iteration": current_iter,
                     "psnr": -1
                 }
-                save_checkpoint(savestate, config, current_iter, logger)
+                save_checkpoint(savestate, config, logger)
 
             # Log
             if current_iter % config.LOGGING.LOG_EVERY == 0:

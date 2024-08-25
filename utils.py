@@ -84,25 +84,23 @@ class CombinedLoss:
 
 
 
-def load_checkpoint(config, model, optimizer, lr_scheduler, logger):
-    logger.info(f"========= > Resuming from {config.MODEL.RESUME}")
-    checkpoint = torch.load(config.MODEL.RESUME, map_location='cpu')
-    msg = model.load_state_dict(checkpoint['model'], strict=False)
-    logger.info(msg)
-    max_accuracy = 0.0
-    optimizer.load_state_dict(checkpoint["optimizer"])
-    lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+def load_checkpoint(state, config, logger):
+    logger.error(f"========= > Resuming from {config.MODEL.RESUME}")
+    checkpoint = torch.load(config.MODEL.RESUME, map_location='cpu', weights_only=True)
+    iter = checkpoint["iteration"]
+    for k, v in checkpoint.items():
+        if k in state and isinstance(state[k], torch.nn.Module):
+            state[k].load_state_dict(checkpoint[k])
+            logger.error(f"=== > loaded successfully \"{k}\" (iter {iter})")
+        elif k in state:
+            state[k] = checkpoint[k]
+        else:
+            logger.error(f"=== > failed to load \"{k}\" (iter {iter})")
     config.defrost()
     config.TRAIN.START_ITERATION = checkpoint["iteration"] + 1
-    logger.info(f"========= > loaded successfully '{config.MODEL.RESUME}' (iter {checkpoint['iteration']})")
-    psnr = checkpoint["psnr"]
-    del checkpoint
-    torch.cuda.empty_cache()
-    return psnr
 
 
-def save_checkpoint(state, config, iter, logger):
-    state["iteration"] = iter
+def save_checkpoint(state, config, logger):
     savepath = os.path.join(
         config.TRAIN.CHECKPOINT_DIR,
         config.TAG,
