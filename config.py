@@ -53,23 +53,40 @@ _C.DATA.NUM_WORKERS = 0
 # -----------------------------------------------------------------------------
 _C.MODEL = CN()
 _C.MODEL.NAME = ""
-_C.MODEL.RGB_OUTPUT = True
+# _C.MODEL.RGB_OUTPUT = True
 _C.MODEL.RESUME = ''
+# If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
+_C.MODEL.SHARED_LUMA_CHROMA = True
 
-# Localized Frequency Domain Transformer (LFDT) parameters
-# We'll call it Spectral Transformer :)
+
+# `BlockNet` embeds the DCT coefficients of each 8x8 block into embedding vector
+# Interaction type between quantization table and DCT coefficients
+# Dimension of embedding vector == MODEL.SPECTRAL.EMBED_DIM
+_C.MODEL.ENCODER_INTERACTION = "none"
+_C.MODEL.DECODER_INTERACTION = "none"
+
+# `SpectralModel`
 _C.MODEL.SPECTRAL = CN()
-# Number of
+# Dimension of input vector to `SpectralModel`
 _C.MODEL.SPECTRAL.INPUT_DIM = 64
-_C.MODEL.SPECTRAL.DEPTHS = [1, 4, 2]
-_C.MODEL.SPECTRAL.EMBED_DIMS = [64, 128, 64]
-_C.MODEL.SPECTRAL.WINDOW_SIZES = [7, 7, 7]
-_C.MODEL.SPECTRAL.NUM_HEADS = [4, 4, 4]
-_C.MODEL.SPECTRAL.MLP_DIMS = [512, 1024, 1024]
+# Number of `SpectralEncoderLayer` layers
+_C.MODEL.SPECTRAL.DEPTH = 4
+# Dimension of embedding vectors - d_model
+_C.MODEL.SPECTRAL.EMBED_DIM = 128
+# Window size used for self-attention in each `SpectralEncoderLayer`
+_C.MODEL.SPECTRAL.WINDOW_SIZES = [7, 7, 7, 7]
+# Number of attention heads in each `SpectralEncoderLayer`
+_C.MODEL.SPECTRAL.NUM_HEADS = [4, 4, 4, 4]
+# Dimension of feedforward network in each `SpectralEncoderLayer`
+_C.MODEL.SPECTRAL.MLP_DIMS = [512, 512, 512, 512]
+# If True, add bias to Q, K, V projection matrices
 _C.MODEL.SPECTRAL.QKV_BIAS = True
-_C.MODEL.SPECTRAL.DROPOUTS = [0.1, 0.1, 0.1]
+# Dropout rates in feedforward networks of each `SpectralEncoderLayer`
+_C.MODEL.SPECTRAL.DROPOUTS = [0.1, 0.1, 0.1, 0.1]
+# Type of output transform to be applied on `SpectralModel`'s outputs.
+# One of ["identity", "rgb", "ycc"].
+_C.MODEL.SPECTRAL.OUTPUT_TRANSFORM = "ycc"
 
-# Frequency Enhance Net -> follows after LFDT
 
 # Chrominance Upscale Net
 # We'll call it Chroma net
@@ -91,6 +108,8 @@ _C.MODEL.CHROMA.LEAF_KERNEL_SIZE = 3
 _C.TRAIN = CN()
 _C.TRAIN.DEVICE = "mps"
 _C.TRAIN.BATCH_SIZE = 32
+# Update parameters once in every `ACCUMULATE_GRADS` iterations.
+_C.TRAIN.ACCUMULATE_GRADS = 1
 _C.TRAIN.START_ITERATION = 0
 _C.TRAIN.NUM_ITERATIONS = 50_000
 _C.TRAIN.WARMUP_ITERATIONS = 1000
@@ -98,7 +117,13 @@ _C.TRAIN.WEIGHT_DECAY = 0.05
 _C.TRAIN.BASE_LR = 5e-4
 _C.TRAIN.WARMUP_LR = 1e-6
 _C.TRAIN.MIN_LR = 5e-6
+# Maximum gradient norm. Gradients with norm > this one, are clipped
 _C.TRAIN.CLIP_GRAD = 5.0
+# How the norm the gradients computed?
+#   * If "total", the norm is computed over all gradients together, as if they
+# were concatenated into a single vector.
+#   * If "param", the norm is computed individually for each parameter.
+_C.TRAIN.CLIP_GRAD_METHOD = "total"
 _C.TRAIN.CHECKPOINT_EVERY = 2000
 _C.TRAIN.CHECKPOINT_DIR = "checkpoints/"
 # _C.TRAIN.ACCUMULATION_STEPS = 1
@@ -106,7 +131,7 @@ _C.TRAIN.CHECKPOINT_DIR = "checkpoints/"
 # Optimizer
 _C.TRAIN.OPTIMIZER = CN()
 _C.TRAIN.OPTIMIZER.NAME = "adamw"
-_C.TRAIN.OPTIMIZER.KWARGS = [ ("betas", (0.9, 0.999)), ("weight_decay", 1e-3) ]
+_C.TRAIN.OPTIMIZER.KWARGS = [ ("betas", (0.9, 0.999)), ("weight_decay", 1e-6) ]
 
 # Learning rate scheduler
 _C.TRAIN.LR_SCHEDULER = CN()
@@ -120,12 +145,16 @@ _C.TRAIN.LR_SCHEDULER.WARMUP_PREFIX = True
 # -----------------------------------------------------------------------------
 _C.VALIDATION = CN()
 _C.VALIDATION.BATCH_SIZE = 64
+_C.VALIDATION.EVERY = 500
+
 
 # -----------------------------------------------------------------------------
 # Test config
 # -----------------------------------------------------------------------------
 _C.TEST = CN()
 _C.TEST.BATCH_SIZE = 64
+_C.TEST.SAMPLES_DIR = "data/samples/"
+
 
 
 # -----------------------------------------------------------------------------
@@ -134,8 +163,6 @@ _C.TEST.BATCH_SIZE = 64
 _C.LOSS = CN()
 # Name of the loss function / criterion used from PyTorch library
 _C.LOSS.CRITERION = "huber"
-# Keyword arguments passed to torch.nn loss criterion
-_C.LOSS.CRITERION_KWARGS = [("delta", 1.0)]
 # Multiplier of Luminance (Y) plane loss in total Spectral Loss
 _C.LOSS.LUMA_WEIGHT = 0.5
 # Multiplier of Chrominance (Cb, Cr) planes loss in total Spectral Loss
@@ -144,6 +171,7 @@ _C.LOSS.CHROMA_WEIGHT = 0.25
 _C.LOSS.ALPHA = 100.0
 # Multiplier of Chroma Loss
 _C.LOSS.BETA = 1.0
+
 # -----------------------------------------------------------------------------
 # Logging setting
 # -----------------------------------------------------------------------------

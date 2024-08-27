@@ -1,3 +1,4 @@
+import copy
 import math
 from typing import List
 
@@ -7,6 +8,7 @@ import torch.nn as nn
 
 from jpegutils import SUBSAMPLE_FACTORS
 
+DIM_QTABLE = 64
 
 class ARCNN(nn.Module):
 
@@ -242,9 +244,10 @@ class Local2DAttentionLayer(nn.Module):
 
         # Since no nonlinearity follows the projection matrices, we'll
         # initialize them with Xavier's method
-        torch.nn.init.xavier_uniform_(self.project_q.weight, gain=1.0)
-        torch.nn.init.xavier_uniform_(self.project_k.weight, gain=1.0)
-        torch.nn.init.xavier_uniform_(self.project_v.weight, gain=1.0)
+        gain = 1 / 64
+        torch.nn.init.xavier_uniform_(self.project_q.weight, gain=gain)
+        torch.nn.init.xavier_uniform_(self.project_k.weight, gain=gain)
+        torch.nn.init.xavier_uniform_(self.project_v.weight, gain=gain)
 
         # Relative positional encodings bias table
         self.relative_positional_bias = nn.Parameter(
@@ -292,16 +295,16 @@ class Local2DAttentionLayer(nn.Module):
 
 
 class SpectralEncoderLayer(nn.Module):
+    """Expects input of shape (N, H, W, E)"""
 
-    def __init__(self, kernel_size=7, d_model=128, d_qcoeff=64, num_heads=4,
+    def __init__(self, window_size=7, d_model=128, num_heads=4,
                  d_feedforward=512, dropout=0.1, activation=nn.GELU, bias=True,
                  layer_norm_eps=1e-05, add_bias_kqv=True):
 
         super().__init__()
 
-        self.kernel_size    = kernel_size
+        self.window_size    = window_size
         self.d_model        = d_model
-        self.d_qcoeff       = d_qcoeff
         self.num_heads      = num_heads
         self.d_feedforward  = d_feedforward
         self.dropout        = dropout
@@ -311,19 +314,14 @@ class SpectralEncoderLayer(nn.Module):
         self.add_bias_kv    = add_bias_kqv
 
         self.local_attention = Local2DAttentionLayer(
-            kernel_size=kernel_size,
+            kernel_size=window_size,
             embed_dim=d_model,
             num_heads=num_heads,
             bias=bias,
             add_bias_kqv=add_bias_kqv,
         )
-        self.bilinear = nn.Bilinear(
-            in1_features=d_model,
-            in2_features=d_qcoeff,
-            out_features=d_model
-        )
-        self.layernorm1  = nn.LayerNorm(normalized_shape=d_model, eps=layer_norm_eps)
-        self.layernorm2  = nn.LayerNorm(normalized_shape=d_model, eps=layer_norm_eps)
+        self.layernorm1  = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.layernorm2  = nn.LayerNorm(d_model, eps=layer_norm_eps)
         self.activation  = activation
         self.feedforward = nn.Sequential(
             nn.Linear(in_features=d_model, out_features=d_feedforward),
@@ -332,22 +330,13 @@ class SpectralEncoderLayer(nn.Module):
             nn.Linear(in_features=d_feedforward, out_features=d_model),
         )
 
-    def forward(self, x, qcoeff):
-        # qcoeff is batched
-
-        E = self.d_model
-        N, C, H, W = x.shape
-        qcoeff = torch.tile(qcoeff.view(N, 1, 1, self.d_qcoeff), (1, H, W, 1))
-
-        xnorm = self.layernorm1(x.permute(0, 2, 3, 1))          # (N, H, W, E)
-        z0, _ = self.local_attention(xnorm.permute(0, 3, 1, 2))
-        # (N, E, H, W)
-        z0 = z0.permute(0, 2, 3, 1)                             # (N, H, W, E)
-        z1 = self.bilinear(z0, qcoeff)                          # (N, H, W, E)
-        z2 = z1 + x.permute(0, 2, 3, 1)
-        z3 = self.layernorm2(z2)                                # (N, H, W, E)
-        z4 = self.feedforward(z3) + z2                          # (N, H, W, E)
-        return z4.permute(0, 3, 1, 2)
+    def forward(self, x: torch.tensor):
+        # N, H, W, E = x.shape
+        y0 = self.layernorm1(x)                                 # (N, H, W, E)
+        y1, _ = self.local_attention(y0.permute(0, 3, 1, 2))    # (N, E, H, W)
+        y2 = y1.permute(0, 2, 3, 1)                             # (N, H, W, E)
+        y3 = self.layernorm2(y2 + x)                            # (N, H, W, E)
+        return y2 + self.feedforward(y3)                        # (N, E, H, W)
 
 
 class SpectralEncoder(nn.Module):
@@ -534,10 +523,108 @@ class SpectralNet(nn.Module):
         out = self.output_transform(dct_tensor + x, chroma)
         return out
 
+class BlockEncoder(nn.Module):
+    """Encodes DCT tensor with shape (N, 64, H, W) to embedding vectors with
+    shape (N, H, W, E)."""
+
+    def __init__(self, in_channels: int, out_channels: int, interaction: str):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        assert interaction in ("FiLM", "CFM", "concat", "none")
+        self.interaction = interaction
+        if interaction == "FiLM":
+            self.conv1 = nn.Conv2d(in_channels, in_channels, 3, 1, "same")
+            self.conv2 = nn.Conv2d(in_channels, out_channels, 1, 1)
+        elif interaction == "CFM":
+            raise NotImplementedError
+        elif interaction == "concat":
+            self.project = nn.Linear(in_channels + DIM_QTABLE, out_channels)
+        elif interaction == "none":
+            self.project = nn.Conv2d(in_channels, out_channels, 1, 1)
+
+    def _forward_film(self, dctensor, qt):
+        N = dctensor.shape[0]
+        x = qt.view(N, DIM_QTABLE, 1, 1) * self.conv1(dctensor)
+        return self.conv2(dctensor + x).permute(0,2,3,1)
+
+    def _forward_concat(self, dctensor, qt):
+        N, _, H, W = dctensor.shape
+        x0 = torch.tile(qt.view(N, DIM_QTABLE, 1, 1), (1, 1, H, W))
+        x1 = torch.cat([dctensor, x0], dim=1)
+        return self.project(x1.permute(0,2,3,1))
+
+    def forward(self, dctensor, qt):
+        # dctensor.shape == (N, 64, H, W)
+        # qt.shape == (N, `DIM_QTABLE`)
+        if self.interaction == "FiLM":
+            return self._forward_film(dctensor, qt)
+        elif self.interaction == "CFM":
+            raise NotImplementedError
+        elif self.interaction == "concat":
+            return self._forward_concat(dctensor, qt)
+        elif self.interaction == "none":
+            return self.project(dctensor).permute(0,2,3,1)
+
+class BlockDecoder(nn.Module):
+    """Decodes embedding tensor with shape (N, H, W, E) to DCT residual with
+    shape (N, 64, H, W)."""
+
+    def __init__(self, in_channels: int, out_channels: int, interaction: str):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        assert interaction in ("FiLM", "CFM", "concat", "none")
+        self.interaction = interaction
+        self.project = nn.Conv2d(in_channels, out_channels, 1, 1)
+
+    def forward(self, embedding, qt):
+        embedding = embedding.permute(0,3,1,2)
+        if self.interaction == "FiLM":
+            N = embedding.shape[0]
+            return self.project(embedding) * qt.view(N, DIM_QTABLE, 1, 1)
+        elif self.interaction == "CFM":
+            raise NotImplementedError
+        elif self.interaction == "concat":
+            raise NotImplementedError
+        elif self.interaction == "none":
+            return self.project(embedding)
+
+
+class SpectralTransformer(nn.Module):
+
+    def __init__(self, encoder_layers: List[SpectralEncoderLayer]):
+        super().__init__()
+        self.num_layers = len(encoder_layers)
+        self.encoders = nn.ModuleList(encoder_layers)
+
+    def forward(self, x):
+        for enc in self.encoders:
+            x = enc(x)
+        return x
+
+class SpectralModel(nn.Module):
+
+    def __init__(self, block_encoder: BlockEncoder, transformer: SpectralTransformer,
+                block_decoder: BlockDecoder):
+        super().__init__()
+        self.block_encoder = block_encoder
+        self.transformer = transformer
+        self.block_decoder = block_decoder
+
+    def forward(self, dct, qt):
+        # dct.shape == (N, C, H, W)
+        # qt.shape ==  (N, `DIM_QTABLE`)
+        emb = self.block_encoder(dct, qt)       # (N, H, W, E)
+        y = self.transformer(emb)               # (N, H, W, E)
+        residual = self.block_decoder(y, qt)    # (N, `DIM_QTABLE`, H, W)
+        return dct + 0.0 * residual
+
 
 class ConvNeXtBlock(nn.Module):
 
-    def __init__(self, in_channels: int, mid_channels: int, kernel_size: int):
+    def __init__(self, in_channels: int, mid_channels: int, kernel_size: int,
+                 norm: str = "layer"):
         super().__init__()
 
         self.in_channels  = in_channels
@@ -545,6 +632,7 @@ class ConvNeXtBlock(nn.Module):
         self.out_channels = in_channels
         self.kernel_size  = kernel_size
 
+        NormLayer = nn.BatchNorm2d if norm == "layer" else LayerNorm2D
         self.dwconv = nn.Conv2d(
             in_channels=    in_channels,
             out_channels=   in_channels,
@@ -552,7 +640,7 @@ class ConvNeXtBlock(nn.Module):
             padding=        "same",
             groups=         in_channels
         )
-        self.norm = nn.LayerNorm(in_channels, eps=1e-6)
+        self.norm = NormLayer(in_channels)
         self.pwconv1 = nn.Linear(in_channels, mid_channels)
         self.activation = nn.GELU()
         self.pwconv2 = nn.Linear(mid_channels, in_channels)
@@ -560,12 +648,12 @@ class ConvNeXtBlock(nn.Module):
     def forward(self, x):
         # x.shape == (B,C,H,W)
         z = x
-        y = self.dwconv(z).permute(0,2,3,1)     # (B, H, W, C)
-        y = self.norm(y)
+        y = self.dwconv(z)                      # (B, C, H, W)
+        y = self.norm(y).permute(0,2,3,1)
         y = self.pwconv1(y)
         y = self.activation(y)
         y = self.pwconv2(y).permute(0,3,1,2)    # (B, C, H, W)
-        return x + y
+        return z + y
 
 
 class ChromaNet(nn.Module):
@@ -577,7 +665,8 @@ class ChromaNet(nn.Module):
             in_channels: int = 3,
             out_channels: int = 3,
             kernel_size: int = 3,
-            skip = False
+            skip: bool = False,
+            norm: str = "layer"
     ):
         super().__init__()
 
@@ -587,30 +676,27 @@ class ChromaNet(nn.Module):
         self.output_transform = output_transform
         self.skip = skip
 
+        NormLayer = nn.BatchNorm2d if norm == "batch" else LayerNorm2D
+
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, stages[0].in_channels, kernel_size, padding="same"),
-            LayerNorm2D(stages[0].in_channels)
+            NormLayer(stages[0].out_channels)
         )
-        self.body = nn.Sequential(*stages)
-        linear = []
+        body = []
         for i in range(len(stages)):
             in_c = stages[i].out_channels
             out_c = out_channels if i == len(stages) - 1 else stages[i+1].in_channels
-            layer = nn.Sequential(
-                LayerNorm2D(in_c),
-                nn.Conv2d(in_c, out_c, 1, bias=False))
-            linear.append(layer)
-        self.linear = nn.ModuleList(linear)
-
+            body.append(stages[i])
+            body.append(NormLayer(in_c))
+            body.append(nn.Conv2d(in_c, out_c, 1, bias=False))
+        self.body = nn.Sequential(*body)
 
     def forward(self, x):
         if self.skip:
             return self.output_transform(x)
         else:
             y = self.stem(x)
-            for i in range(len(self.body)):
-                y = self.body[i](y)
-                y = self.linear[i](y)
+            y = self.body(y)
             return self.output_transform(x + y)
 
 

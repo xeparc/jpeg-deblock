@@ -1,3 +1,4 @@
+import logging
 import os
 import numpy as np
 import torch
@@ -100,7 +101,7 @@ def load_checkpoint(state, config, logger):
     config.TRAIN.START_ITERATION = checkpoint["iteration"] + 1
 
 
-def save_checkpoint(state, config, logger):
+def save_checkpoint(state, config, monitor):
     i = state["iteration"]
     savepath = os.path.join(
         config.TRAIN.CHECKPOINT_DIR,
@@ -108,6 +109,18 @@ def save_checkpoint(state, config, logger):
         f'checkpoint_{i}.pth'
     )
     os.makedirs(os.path.dirname(savepath), exist_ok=True)
-    logger.info(f"{savepath} saving......")
+    monitor.log(logging.INFO, f"{savepath} saving......")
     torch.save(state, savepath)
-    logger.info(f"{savepath} saved !!!")
+    monitor.log(logging.INFO, f"{savepath} saved !!!")
+
+
+def charbonnier_loss(input, target, reduction="mean", eps=1e-3):
+    l = torch.sqrt((input - target) ** 2 + eps)
+    if reduction == "mean":
+        return torch.mean(l)
+    elif reduction == "sum":
+        return torch.sum(l)
+    elif reduction == "none":
+        return l
+    else:
+        raise ValueError

@@ -1,16 +1,30 @@
 import argparse
 import datetime
+import logging
 import os
 import time
 from typing import List, Callable
 import yaml
 
+import numpy as np
 from yacs.config import CfgNode
 
 from config import default_config, get_config
 from builders import *
-from utils import RunningStats, save_checkpoint, load_checkpoint
+from inference import (
+    predict_spectral,
+    deartifact_jpeg
+)
 from jpegutils import SUBSAMPLE_FACTORS
+from monitoring import TrainingMonitor, NullMonitor
+from utils import (
+    RunningStats,
+    save_checkpoint,
+    load_checkpoint,
+    charbonnier_loss,
+    is_image
+)
+
 
 
 def main(cfg):
@@ -19,52 +33,355 @@ def main(cfg):
 
     train_loader    = build_dataloader(cfg, "train")
     val_loader      = build_dataloader(cfg, "val")
-    test_loader     = build_dataloader(cfg, "test")
 
-    spectre         = build_spectral_net(cfg).to(device)
-    chroma          = build_chroma_net(cfg).to(device)
-    criterion       = build_criterion(cfg)
+    if cfg.MODEL.SHARED_LUMA_CHROMA:
+        spectral_luma   = build_spectral_model(cfg).to(device)
+        spectral_chroma = build_spectral_model(cfg).to(device)
+        optim           = build_optimizer(cfg, spectral_luma.parameters(),
+                                               spectral_chroma.parameters())
+    else:
+        spectral        = build_spectral_model(cfg).to(device)
+        spectral_luma   = spectral
+        spectral_chroma = spectral
+        optim           = build_optimizer(cfg, spectral.parameters())
 
-    optim           = build_optimizer(cfg, spectre.parameters(), chroma.parameters())
     lr_scheduler    = build_lr_scheduler(cfg, optim)
     logger          = build_logger(cfg)
+    monitor         = TrainingMonitor(logger)
 
     if cfg.TRAIN.CHECKPOINT_EVERY > 0:
         os.makedirs(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.MODEL.NAME),
                     exist_ok=True)
 
-    train_loop(cfg, spectre, chroma, criterion, train_loader, optim,
-               lr_scheduler, logger)
-
-
-
-def predict_train(spectral_net, chroma_net, datapoint, subsample: str):
-    input_yy_dct =  datapoint["lq_dct_y"]
-    input_cb_dct =  datapoint["lq_dct_cb"]
-    input_cr_dct =  datapoint["lq_dct_cr"]
-    qt_luma =       datapoint["qt_y"]
-    qt_chroma =     datapoint["qt_c"]
-
-    out_yy = spectral_net(input_yy_dct, qt_luma, chroma=False)
-    out_cb = spectral_net(input_cb_dct, qt_chroma, chroma=True)
-    out_cr = spectral_net(input_cr_dct, qt_chroma, chroma=True)
-
-    scale = SUBSAMPLE_FACTORS[subsample]
-
-    # Upsample chroma components
-    upsampled_cb = torch.nn.functional.interpolate(
-        out_cb, scale_factor=scale, mode="nearest"
-    )
-    upsampled_cr = torch.nn.functional.interpolate(
-        out_cr, scale_factor=scale, mode="nearest"
+    train_validate_test_loop_spectral(
+        config=             cfg,
+        spectral_luma=      spectral_luma,
+        spectral_chroma=    spectral_chroma,
+        train_loader=       train_loader,
+        val_loader=         val_loader,
+        optimizer=          optim,
+        lr_scheduler=       lr_scheduler,
+        monitor=            monitor
     )
 
-    # Concatenate Y, Cb+, Cr+ planes
-    ycc = torch.concatenate([out_yy, upsampled_cb, upsampled_cr], dim=1)
-    enhanced = chroma_net(ycc)
-    assert ycc.shape[1] == 3
 
-    return {"Y": out_yy, "Cb": out_cb, "Cr": out_cr, "final": enhanced}
+
+# def predict_train(spectral_net, chroma_net, datapoint, subsample: str):
+#     input_yy_dct =  datapoint["lq_dct_y"]
+#     input_cb_dct =  datapoint["lq_dct_cb"]
+#     input_cr_dct =  datapoint["lq_dct_cr"]
+#     qt_luma =       datapoint["qt_y"]
+#     qt_chroma =     datapoint["qt_c"]
+
+#     out_yy = spectral_net(input_yy_dct, qt_luma, chroma=False)
+#     out_cb = spectral_net(input_cb_dct, qt_chroma, chroma=True)
+#     out_cr = spectral_net(input_cr_dct, qt_chroma, chroma=True)
+
+#     scale = SUBSAMPLE_FACTORS[subsample]
+
+#     # Upsample chroma components
+#     upsampled_cb = torch.nn.functional.interpolate(
+#         out_cb, scale_factor=scale, mode="nearest"
+#     )
+#     upsampled_cr = torch.nn.functional.interpolate(
+#         out_cr, scale_factor=scale, mode="nearest"
+#     )
+
+#     # Concatenate Y, Cb+, Cr+ planes
+#     ycc = torch.concatenate([out_yy, upsampled_cb, upsampled_cr], dim=1)
+#     enhanced = chroma_net(ycc)
+#     assert ycc.shape[1] == 3
+
+#     return {"Y": out_yy, "Cb": out_cb, "Cr": out_cr, "final": enhanced}
+
+
+def clip_gradients(model, max_norm: float, how: str):
+
+    model_name = type(model).__name__
+
+    if how == "total":
+        parameters = model.parameters()
+        g = torch.nn.utils.clip_grad_norm_(parameters, max_norm,
+                                           error_if_nonfinite=True)
+    elif how == "param":
+        for name, param in model.named_parameters():
+            g = torch.nn.utils.clip_grad_norm_([param], max_norm,
+                                               error_if_nonfinite=True)
+
+def log_grad_norms(model, monitor, current_iter: int, model_name: str = ''):
+    pass
+    # else:
+    #     total_norm = 0.0
+    #     for name, param in model.named_parameters():
+    #         msg = f"total grad norm [{model_name}]: {g.cpu().item():.5f}"
+    #     monitor.log(logging.DEBUG, msg)
+
+
+
+def spectral_loss(config, prediction: dict, target: dict, monitor, **kwargs):
+    output_type   = config.MODEL.SPECTRAL.OUTPUT_TRANSFORM
+    loss_type     = config.LOSS.CRITERION
+    luma_weight   = config.LOSS.LUMA_WEIGHT
+    chroma_weight = config.LOSS.CHROMA_WEIGHT
+
+    if loss_type == "mse":
+        criterion = torch.nn.functional.mse_loss
+    elif loss_type == "huber":
+        criterion = torch.nn.functional.huber_loss
+    elif loss_type == "charbonnier":
+        criterion = charbonnier_loss
+
+    if output_type == "identity":
+        lossY  = criterion(prediction["dctY"], target["dctY"], **kwargs)
+        lossCb = criterion(prediction["dctCb"], target["dctCb"], **kwargs)
+        lossCr = criterion(prediction["dctCr"], target["dctCr"], **kwargs)
+        # Track loss. Explicitly use mean(), because kwargs may contain
+        # reduction="none"
+        monitor.add_scalar("loss-dct-Y", lossY.detach().cpu().mean().item())
+        monitor.add_scalar("loss-dct-Cb", lossCb.detach().cpu().mean().item())
+        monitor.add_scalar("loss-dct-Cr", lossCr.detach().cpu().mean().item())
+        return luma_weight * lossY + chroma_weight * (lossCb + lossCr)
+    elif output_type == "ycc":
+        loss = criterion(prediction["ycc"], target["ycc"], **kwargs)
+        # Track loss. Explicitly use mean(), because kwargs may contain
+        # reduction="none"
+        monitor.add_scalar("loss", loss.detach().cpu().mean().item())
+        return loss
+    elif output_type == "rgb":
+        loss = criterion(prediction["rgb"], target["rgb"], **kwargs)
+        # Track loss. Explicitly use mean(), because kwargs may contain
+        # reduction="none"
+        monitor.add_scalar("rgb", loss.detach().cpu().mean().item())
+        return loss
+    else:
+        raise ValueError
+
+
+@torch.no_grad()
+def validate_spectral(
+        config: CfgNode,
+        spectral_luma: SpectralModel,
+        spectral_chroma: SpectralModel,
+        dataloader: torch.utils.data.DataLoader,
+        monitor
+    ):
+
+    monitor.log(logging.INFO, "validate_spectral()...")
+
+    subsample =             config.DATA.SUBSAMPLE
+    out_transform =         config.MODEL.SPECTRAL.OUTPUT_TRANSFORM
+
+    losses = {}
+    psnrs  = {}
+    nullmonitor = NullMonitor()
+
+    tic = time.time()
+    for batch in dataloader:
+        quality = batch["quality"]
+        # Run forward pass, make predictions
+        preds = predict_spectral(spectral_luma, spectral_chroma, batch,
+                                 out_transform, subsample)
+        targets = {"dctY": batch["hq_dct_y"], "dctCb": batch["hq_dct_cb"],
+                   "dctCr": batch["hq_dct_cr"]}
+        if out_transform == "ycc":
+            targets["ycc"] = batch["hq_ycc"]
+        elif out_transform == "rgb":
+            targets["rgb"] = batch["hq_rgb"]
+
+        # Calculate loss
+        loss = spectral_loss(config, preds, targets, nullmonitor, reduction="none")
+        assert loss.ndim == 4
+        loss = loss.mean(dim=(1,2,3)).cpu().numpy()
+        for q, l in zip(quality, loss):
+            # Aggregate over qualities with bin size = 10
+            key = (q // 10) * 10
+            losses.setdefault(key, []).append(l)
+            psnrs.setdefault(key, []).append(-10.0 * np.log10(l - 1e-6))
+
+    bins = sorted(losses.keys())
+
+    mean_       = [np.mean(losses[k]) for k in bins]
+    min_        = [np.min(losses[k]) for k in bins]
+    max_        = [np.max(losses[k]) for k in bins]
+    std_        = [np.std(losses[k]) for k in bins]
+
+    mean_psnr_  = [np.mean(psnrs[k]) for k in bins]
+    min_psnr_   = [np.min(psnrs[k]) for k in bins]
+    max_psnr_   = [np.max(psnrs[k]) for k in bins]
+    std_psnr_   = [np.std(psnrs[k]) for k in bins]
+
+    t = int(time.time() - tic)
+    monitor.add_scalar("validation-time", t)
+    monitor.log(logging.INFO,
+                f"validate_spectral() took {datetime.timedelta(seconds=t)}")
+
+    monitor.add_histogram("validation-loss-mean", bins, mean_)
+    monitor.add_histogram("validation-loss-min", bins, min_)
+    monitor.add_histogram("validation-loss-max", bins, max_)
+    monitor.add_histogram("validation-loss-std", bins, std_)
+
+    monitor.add_histogram("validation-psnr-mean", bins, mean_psnr_)
+    monitor.add_histogram("validation-psnr-min", bins, min_psnr_)
+    monitor.add_histogram("validation-psnr-max", bins, max_psnr_)
+    monitor.add_histogram("validation-psnr-std", bins, std_psnr_)
+
+
+
+@torch.no_grad()
+def sample_test_spectral(
+        config: CfgNode,
+        spectral_luma: SpectralModel,
+        spectral_chroma: SpectralModel,
+        filepaths: List[str],
+        monitor
+    ):
+    monitor.log(logging.INFO, "sample_test_spectral()...")
+
+    tic = time.time()
+    for path in filepaths:
+        name = '.'.join(os.path.basename(path).split('.')[:-1])
+        img = deartifact_jpeg(config, spectral_luma, spectral_chroma, path)
+        monitor.add_image(name, img)
+
+    t = int(time.time() - tic)
+    monitor.log(logging.INFO,
+                f"sample_test_spectral() took {datetime.timedelta(seconds=t)}")
+
+
+def train_spectral(
+        config: CfgNode,
+        spectral_luma: SpectralModel,
+        spectral_chroma: SpectralModel,
+        dataloader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler,
+        monitor,
+        start_iter: int,
+        max_iters: int
+    ):
+
+    current_iter =          start_iter
+    subsample =             config.DATA.SUBSAMPLE
+    out_transform =         config.MODEL.SPECTRAL.OUTPUT_TRANSFORM
+    accum =                 config.TRAIN.ACCUMULATE_GRADS
+    clip_grad_method =      config.TRAIN.CLIP_GRAD_METHOD
+    max_norm =              config.TRAIN.CLIP_GRAD
+    checkpoint_every =      config.TRAIN.CHECKPOINT_EVERY
+    shared_models =         config.MODEL.SHARED_LUMA_CHROMA
+    log_every =             config.LOGGING.LOG_EVERY
+    total_iters =           config.TRAIN.NUM_ITERATIONS
+
+    spectral_luma.train()
+    spectral_chroma.train()
+
+    while current_iter < max_iters:
+        for batch in dataloader:
+            current_iter += 1
+            if current_iter >= max_iters:
+                break
+            optimizer.zero_grad()
+
+            # Collect targets
+            targets = {"dctY": batch["hq_dct_y"], "dctCb": batch["hq_dct_cb"],
+                       "dctCr": batch["hq_dct_cr"]}
+            if out_transform == "ycc":
+                targets["ycc"] = batch["hq_ycc"]
+            elif out_transform == "rgb":
+                targets["rgb"] = batch["hq_rgb"]
+
+            # Run forward pass, make predictions
+            tic = time.time()
+            preds = predict_spectral(spectral_luma, spectral_chroma, batch,
+                                     out_transform, subsample)
+
+            # Calculate loss
+            loss = spectral_loss(config, preds, targets, monitor) / accum
+            loss.backward()
+
+            # Update parameters
+            if current_iter % accum == 0:
+                # Clip gradients
+                clip_gradients(spectral_luma, max_norm, clip_grad_method)
+                optimizer.step()
+                lr_scheduler.step()
+
+            # Track stats
+            batch_time = time.time() - tic
+            loss_ = accum * loss.detach().cpu().item()
+            lr_   = lr_scheduler.get_last_lr()[0]
+            eta   = int(batch_time * (total_iters - current_iter))
+
+            monitor.add_scalar("iteration", current_iter)
+            monitor.add_scalar("batch-time", batch_time)
+            monitor.add_scalar("loss", loss_)
+            monitor.add_scalar("learning-rate", lr_)
+            # Log stats
+            if current_iter % log_every == 0:
+                monitor.log(
+                    logging.ERROR,
+                    f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
+                    f"time: {batch_time:.2f}\t"
+                    f"eta: {datetime.timedelta(seconds=eta)}\t"
+                    f"loss: {loss_:.4f}\t"
+                    f"lr: {lr_:.6f}\t"
+                    f"memory: {get_alloc_memory(config):.0f}MB"
+                )
+                # Log gradient norms
+                if shared_models:
+                    log_grad_norms(spectral_luma, monitor, current_iter,
+                                   "SpectralModel[Shared]")
+                else:
+                    log_grad_norms(spectral_luma, monitor, current_iter,
+                                "SpectralModel[Luma]")
+                    log_grad_norms(spectral_chroma, monitor, current_iter,
+                                "SpectralModel[Chroma]")
+
+                # TODO Track relative parameter updates
+
+            # Checkpoint models
+            if current_iter % checkpoint_every == 0:
+                savestate = {
+                    "spectral_luma": spectral_luma.state_dict(),
+                    "spectral_chroma": spectral_chroma.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "iteration": current_iter,
+                    "psnr": -1
+                }
+                save_checkpoint(savestate, config, monitor)
+
+
+def train_validate_test_loop_spectral(
+        config,
+        spectral_luma,
+        spectral_chroma,
+        train_loader,
+        val_loader,
+        optimizer,
+        lr_scheduler,
+        monitor
+):
+
+    val_every =         config.VALIDATION.EVERY
+    max_iters =         config.TRAIN.NUM_ITERATIONS
+
+    # Collect test samples filepaths
+    test_filepaths = []
+    for item in os.scandir(config.TEST.SAMPLES_DIR):
+        if is_image(item.name):
+            test_filepaths.append(item.path)
+
+    for i in range(0, max_iters, val_every):
+        train_spectral(config, spectral_luma, spectral_chroma, train_loader,
+                       optimizer, lr_scheduler, monitor, start_iter=i,
+                       max_iters=i+val_every)
+        # Validate
+        validate_spectral(config, spectral_luma, spectral_chroma, val_loader,
+                          monitor)
+        # Save sample images
+        sample_test_spectral(config, spectral_luma, spectral_chroma,
+                             test_filepaths, monitor)
+        # Repeat...
 
 
 def train_loop(
@@ -102,6 +419,7 @@ def train_loop(
             if current_iter >= max_iters:
                 break
             current_iter += 1
+            optimizer.zero_grad()
 
             tic = time.time()
             # Make predictions
@@ -117,18 +435,29 @@ def train_loop(
             loss = criterion(preds, targets)
             loss["total"].backward()
 
-            # Clip gradients
+            # # Collect gradients
+            grad_norms_ = {}
+            # for name, param in spectral_net.named_parameters():
+            #     if hasattr(param, "grad"):
+            #         grad_norms_[name] = torch.linalg.norm(param.clone().detach().cpu()).item()
+
+            # Collect old parameter values
+            param_values_ = {}
+            for name, param in spectral_net.named_parameters():
+                if hasattr(param, "grad"):
+                    param_values_[name] = param.detach().cpu().clone()
+
+            # Clip gradients (per parameter)
             if clip_grad:
-                spectral_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    spectral_net.parameters(),
-                    max_norm = config.TRAIN.CLIP_GRAD,
-                    error_if_nonfinite=True
-                )
-                chroma_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    chroma_net.parameters(),
-                    max_norm = config.TRAIN.CLIP_GRAD,
-                    error_if_nonfinite=True
-                )
+                with torch.no_grad():
+                    for name, param in spectral_net.named_parameters():
+                        grad_norms_[name] = torch.nn.utils.clip_grad_norm_(
+                            [param],
+                            max_norm = config.TRAIN.CLIP_GRAD,
+                            error_if_nonfinite=True
+                        ).detach().cpu().item()
+                    spectral_grad_norm = sum(grad_norms_.values())
+                # TODO Clip in chroma net
             else:
                 spectral_grad_norm = -1.0
                 chroma_grad_norm   = -1.0
@@ -136,7 +465,6 @@ def train_loop(
             # Optimize
             optimizer.step()
             lr_scheduler.step()
-            optimizer.zero_grad()
 
             # Update meters
             elapsed_time = time.time() - tic
@@ -144,8 +472,8 @@ def train_loop(
             total_loss_meter.update(loss["total"].item())
             spectral_loss_meter.update(loss["spectral"].item())
             chroma_loss_meter.update(loss["chroma"].item())
-            spectral_grad_norm_meter.update(spectral_grad_norm.cpu().numpy())
-            chroma_grad_norm_meter.update(chroma_grad_norm.cpu().numpy())
+            spectral_grad_norm_meter.update(spectral_grad_norm)
+            # chroma_grad_norm_meter.update(chroma_grad_norm.cpu().numpy())
 
             # Checkpoint models
             if current_iter % config.TRAIN.CHECKPOINT_EVERY == 0:
@@ -175,7 +503,7 @@ def train_loop(
                     f"chroma loss: {chroma_loss_meter.mean:.4f} ± {chroma_loss_meter.std:.4f}\t"
                     f"total loss: {total_loss_meter.mean:.4f} ± {total_loss_meter.std:.4f}\t"
                     f"spectral grad norm: {spectral_grad_norm_meter.mean:.4f} ± {spectral_grad_norm_meter.std:.4f}\t"
-                    f"chroma grad norm: {chroma_grad_norm_meter.mean:.4f} ± {chroma_grad_norm_meter.std:.4f}\t"
+                    # f"chroma grad norm: {chroma_grad_norm_meter.mean:.4f} ± {chroma_grad_norm_meter.std:.4f}\t"
                     f"memory: {memory_used:.0f}MB"
                 )
 
@@ -185,14 +513,21 @@ def train_loop(
                 spectral_loss_meter.reset()
                 chroma_loss_meter.reset()
                 spectral_grad_norm_meter.reset()
-                chroma_grad_norm_meter.reset()
+                # chroma_grad_norm_meter.reset()
+
+                # Log individual gradient norms
+                for k, v in grad_norms_.items():
+                    logger.info(f"\tgrad_norm({k:<80}) = {v:.4f}")
+
+                # Log relative updates
+                for k, val in spectral_net.named_parameters():
+                    if k in param_values_:
+                        x0 = torch.linalg.norm(val.detach().cpu() - param_values_[k])
+                        x1 = x0 / (torch.linalg.norm(param_values_[k]) + 1e-6)
+                        logger.info(f"\tupdate_norm({k:<80}) = {x0.item():.4f} / {x1.item():.4f}")
 
         if current_iter >= max_iters:
             break
-
-
-def validate():
-    pass
 
 
 def get_alloc_memory(config):

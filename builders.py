@@ -2,6 +2,7 @@ import json
 import functools
 import logging
 import os
+import sys
 
 import torch
 import torch.utils
@@ -13,8 +14,13 @@ from dataset import (
     ToQTTensor
 )
 from models import (
+    BlockEncoder,
+    BlockDecoder,
     SpectralNet,
     SpectralEncoder,
+    SpectralEncoderLayer,
+    SpectralTransformer,
+    SpectralModel,
     ChromaNet,
     ConvNeXtBlock,
     InverseDCT,
@@ -32,6 +38,45 @@ def get_dct_stats(config):
             "chroma_mean"   : torch.as_tensor(stats["dct_C_mean"]),
             "chroma_std"    : torch.as_tensor(stats["dct_C_std"])
         }
+
+
+def build_block_encoder_decoder(config):
+    encoder = BlockEncoder(64, out_channels=config.MODEL.SPECTRAL.EMBED_DIM,
+                            interaction=config.MODEL.ENCODER_INTERACTION)
+    decoder = BlockDecoder(config.MODEL.SPECTRAL.EMBED_DIM, 64,
+                           interaction=config.MODEL.DECODER_INTERACTION)
+    return encoder, decoder
+
+
+def build_spectral_model(config):
+    num_layers = config.MODEL.SPECTRAL.DEPTH
+    layers = []
+    for i in range(num_layers):
+        encoder_layer = SpectralEncoderLayer(
+            window_size=        config.MODEL.SPECTRAL.WINDOW_SIZES[i],
+            d_model=            config.MODEL.SPECTRAL.EMBED_DIM,
+            num_heads=          config.MODEL.SPECTRAL.NUM_HEADS[i],
+            d_feedforward=      config.MODEL.SPECTRAL.MLP_DIMS[i],
+            dropout=            config.MODEL.SPECTRAL.DROPOUTS[i],
+            add_bias_kqv=       config.MODEL.SPECTRAL.QKV_BIAS
+        )
+        layers.append(encoder_layer)
+
+    transformer = SpectralTransformer(layers)
+    encoder, decoder = build_block_encoder_decoder(config)
+    return SpectralModel(encoder, transformer, decoder)
+
+
+def build_idct(config):
+    """Builds Inverse DCT transform Module."""
+    with open(config.DATA.DCT_STATS_FILEPATH, mode="rt") as f:
+        stats = json.load(f)
+        return InverseDCT(
+            luma_mean     = torch.as_tensor(stats["dct_Y_mean"]),
+            luma_std      = torch.as_tensor(stats["dct_Y_std"]),
+            chroma_mean   = torch.as_tensor(stats["dct_C_mean"]),
+            chroma_std    = torch.as_tensor(stats["dct_C_std"])
+        )
 
 
 def build_spectral_net(config):
@@ -192,22 +237,20 @@ def build_criterion(config):
     )
 
 
-def build_optimizer(config, spectral_params, chroma_params):
+def build_optimizer(config, *params):
 
     name = config.TRAIN.OPTIMIZER.NAME
     kwargs = {k:v for k,v in config.TRAIN.OPTIMIZER.KWARGS}
 
-    # if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
-    #     lr = config.TRAIN.WARMUP_LR
-    # else:
-    #     lr = config.TRAIN.BASE_LR
-
     if name == "adamw":
         optim = torch.optim.AdamW(
-            params=[{"params": spectral_params}, {"params": chroma_params}],
+            params=[{"params": p} for p in params],
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )
+    else:
+        raise NotImplementedError
+
     return optim
 
 
@@ -253,21 +296,40 @@ def build_logger(config, name="train"):
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    # create formatter
-    fmt = '[%(asctime)s %(name)s] (%(filename)s %(lineno)d): %(levelname)s %(message)s'
+    # Create formatter
+    info_fmt = "[%(asctime)s]: %(levelname)s %(message)s"
+    debug_fmt = "[%(asctime)s] (%(filename)s): %(levelname)s %(message)s"
+    warning_fmt = "[%(asctime)s]: %(message)s"
+    datefmt = '%Y-%m-%d %H:%M:%S'
 
-    # create file handlers
-    savepath = os.path.join(config.LOGGING.DIR, config.TAG, "log.txt")
-    fresh = False
-    if not os.path.exists(savepath):
-        os.makedirs(os.path.dirname(savepath), exist_ok=True)
-        open(savepath, mode='w').close()
-        fresh = True
-    file_handler = logging.FileHandler(savepath, mode='a')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
-    logger.addHandler(file_handler)
-    if not fresh:
-        logger.info("\t\tRESTART\n\n")
+    # Create file handlers
+    savepath_info = os.path.join(config.LOGGING.DIR, config.TAG, "info.txt")
+    savepath_debug = os.path.join(config.LOGGING.DIR, config.TAG, "debug.txt")
+
+    #   - Create info handler
+    if not os.path.exists(savepath_info):
+        os.makedirs(os.path.dirname(savepath_info), exist_ok=True)
+        open(savepath_info, mode='w').close()
+    info_handler = logging.FileHandler(savepath_info, mode='a')
+    info_handler.setLevel(logging.INFO)
+    info_handler.setFormatter(logging.Formatter(info_fmt, datefmt))
+
+    #   - Create debug handler
+    if not os.path.exists(savepath_debug):
+        os.makedirs(os.path.dirname(savepath_debug), exist_ok=True)
+        open(savepath_debug, mode='w').close()
+    debug_handler = logging.FileHandler(savepath_debug, mode='a')
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(logging.Formatter(debug_fmt, datefmt))
+
+    #   - Create console handler
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(logging.Formatter(warning_fmt, datefmt))
+
+    logger.addHandler(info_handler)
+    logger.addHandler(debug_handler)
+    logger.addHandler(stdout_handler)
+    logger.warning("\n\n\t\t=== > STARTING TRAINING === >\n")
 
     return logger
