@@ -122,9 +122,10 @@ def spectral_loss(config, prediction: dict, target: dict, monitor, **kwargs):
         criterion = charbonnier_loss
 
     if output_type == "identity":
-        lossY  = criterion(prediction["dctY"], target["dctY"], **kwargs)
-        lossCb = criterion(prediction["dctCb"], target["dctCb"], **kwargs)
-        lossCr = criterion(prediction["dctCr"], target["dctCr"], **kwargs)
+        indices = [0,1,2,3,4,5,6,7,8,9,16,24,32,40,48,56]
+        lossY  = criterion(prediction["dctY"][:,indices], target["dctY"][:,indices], **kwargs)
+        lossCb = criterion(prediction["dctCb"][:,indices], target["dctCb"][:,indices], **kwargs)
+        lossCr = criterion(prediction["dctCr"][:,indices], target["dctCr"][:,indices], **kwargs)
         # Track loss. Explicitly use mean(), because kwargs may contain
         # reduction="none"
         monitor.add_scalar("loss/dct-Y", lossY.detach().cpu().mean().item())
@@ -197,7 +198,7 @@ def validate_spectral(
         monitor.add_scalar(f"validation/psnr-q=[{k},{k+10}]", psnr_[i])
 
     t = int(time.time() - tic)
-    monitor.add_scalar("validation-time", t)
+    # monitor.add_scalar("validation-time", t)
     monitor.log(logging.INFO,
                 f"validate_spectral() took {datetime.timedelta(seconds=t)}")
     monitor.step()
@@ -254,7 +255,7 @@ def train_spectral(
         for batch in dataloader:
             monitor.step()
             current_iter += 1
-            if current_iter >= max_iters:
+            if current_iter > max_iters:
                 break
             optimizer.zero_grad()
 
@@ -278,7 +279,7 @@ def train_spectral(
             # Update parameters
             if current_iter % accum == 0:
                 # Clip gradients
-                # clip_gradients(spectral_luma, max_norm, clip_grad_method)
+                clip_gradients(spectral_luma, max_norm, clip_grad_method)
                 optimizer.step()
                 lr_scheduler.step()
 
