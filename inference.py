@@ -12,52 +12,56 @@ from jpegutils import (
     JPEGTransforms,
     SUBSAMPLE_FACTORS
 )
-
-from dataset import (
-    ToDCTTensor,
-    ToQTTensor,
-)
 from models import (
+    ConvertYccToRGB,
+    InverseDCT,
+    ToQTTensor,
+    ToDCTTensor,
     SpectralModel,
-    ConvertYccToRGB
 )
 from utils import load_checkpoint
 
 
-def predict_spectral(spectral_luma, spectral_chroma, batch,
+def predict_spectral(config, spectral_luma, spectral_chroma, batch,
                      output_transform, subsample: int):
+
     assert output_transform in ("identity", "rgb", "ycc")
 
-    y, cb, cr = batch["lq_dct_y"], batch["lq_dct_cb"], batch["lq_dct_cr"]
+    device = torch.device(config.TRAIN.DEVICE)
+
+    dct_y = batch["lq_dct_y"]
+    dct_cb = batch["lq_dct_cb"]
+    dct_cr = batch["lq_dct_cr"]
     qt_y, qt_c = batch["qt_y"], batch["qt_c"]
 
-    y_pred  = spectral_luma(y, qt_y)
-    cb_pred = spectral_chroma(cb, qt_c)
-    cr_pred = spectral_chroma(cr, qt_c)
+    dct_y_pred  = spectral_luma(dct_y, qt_y)
+    dct_cb_pred = spectral_chroma(dct_cb, qt_c)
+    dct_cr_pred = spectral_chroma(dct_cr, qt_c)
 
-    # to_dct_tensor = ToDCTTensor(**dct_stats)
-
-    # yy = to_dct_tensor(dctobj.Y, chroma=False).unsqueeze(0).to(device)
-    # cb = to_dct_tensor(dctobj.Cb, chroma=True).unsqueeze(0).to(device)
-    # cr = to_dct_tensor(dctobj.Cr, chroma=True).unsqueeze(0).to(device)
-
-    result = {"dctY": y_pred, "dctCb": cb_pred, "dctCr": cr_pred}
+    result = {"dctY": dct_y_pred, "dctCb": dct_cb_pred, "dctCr": dct_cr_pred}
 
     if output_transform != "identity":
+        # Apply Inverse DCT
+        idct = build_idct(config).to(device=device)
+
+        y_planes = idct(dct_y_pred, chroma=False)
+        cb_planes = idct(dct_cb_pred, chroma=True)
+        cr_planes = idct(dct_cr_pred, chroma=True)
+
         scale = SUBSAMPLE_FACTORS[subsample]
         # Upsample chroma components
         upsampled_cb = torch.nn.functional.interpolate(
-            cb_pred, scale_factor=scale, mode="nearest"
+            cb_planes, scale_factor=scale, mode="nearest"
         )
         upsampled_cr = torch.nn.functional.interpolate(
-            cr_pred, scale_factor=scale, mode="nearest"
+            cr_planes, scale_factor=scale, mode="nearest"
         )
         # Concatenate Y, Cb+, Cr+ planes
-        ycc = torch.concatenate([y_pred, upsampled_cb, upsampled_cr], dim=1)
+        ycc = torch.cat([y_planes, upsampled_cb, upsampled_cr], dim=1)
         if output_transform == "ycc":
             result["ycc"] = ycc
         else:
-            result["tgb"] = ConvertYccToRGB()(ycc)
+            result["rgb"] = ConvertYccToRGB().to(device)(ycc)
     return result
 
 
@@ -69,15 +73,16 @@ def deartifact_jpeg(config, spectral_luma, spectral_chroma, filepath: str):
     dctobj = jpeglib.read_dct(filepath)
     H, W = dctobj.height, dctobj.width
     qt_y, qt_c = dctobj.qt[0], dctobj.qt[1]
+
     qt_y = ToQTTensor()(qt_y).to(device)
     qt_c = ToQTTensor()(qt_c).to(device)
 
     dct_stats = get_dct_stats(config)
     to_dct_tensor = ToDCTTensor(**dct_stats)
 
-    yy = to_dct_tensor(dctobj.Y, chroma=False).unsqueeze(0).to(device)
-    cb = to_dct_tensor(dctobj.Cb, chroma=True).unsqueeze(0).to(device)
-    cr = to_dct_tensor(dctobj.Cr, chroma=True).unsqueeze(0).to(device)
+    yy = to_dct_tensor(dctobj.Y * dctobj.qt[0], chroma=False).unsqueeze(0).to(device)
+    cb = to_dct_tensor(dctobj.Cb * dctobj.qt[1], chroma=True).unsqueeze(0).to(device)
+    cr = to_dct_tensor(dctobj.Cr * dctobj.qt[1], chroma=True).unsqueeze(0).to(device)
 
     dct_yy_pred = spectral_luma(yy, qt_y)
     dct_cb_pred = spectral_chroma(cb, qt_c)
@@ -103,7 +108,8 @@ def deartifact_jpeg(config, spectral_luma, spectral_chroma, filepath: str):
 
     torgb = ConvertYccToRGB().to(device)
     ycc = torch.cat([Y, upsampled_cb, upsampled_cr], dim=1)
-    rgb = torch.clamp(torgb(ycc), min=0.0, max=1.0)
+    rgb = torch.clip(torgb(ycc), min=0.0, max=1.0)
+
     img = torchvision.transforms.ConvertImageDtype(torch.uint8)(rgb[0])
     return img.cpu()
 

@@ -123,8 +123,8 @@ _C.TRAIN.CLIP_GRAD = 5.0
 #   * If "total", the norm is computed over all gradients together, as if they
 # were concatenated into a single vector.
 #   * If "param", the norm is computed individually for each parameter.
-_C.TRAIN.CLIP_GRAD_METHOD = "total"
-_C.TRAIN.CHECKPOINT_EVERY = 2000
+_C.TRAIN.CLIP_GRAD_METHOD = "param"
+_C.TRAIN.CHECKPOINT_EVERY = 100
 _C.TRAIN.CHECKPOINT_DIR = "checkpoints/"
 # _C.TRAIN.ACCUMULATION_STEPS = 1
 
@@ -178,7 +178,7 @@ _C.LOSS.BETA = 1.0
 _C.LOGGING = CN()
 _C.LOGGING.LOG_EVERY = 100
 _C.LOGGING.DIR = "logs/"
-
+_C.LOGGING.WANDB = True
 
 
 def default_config():

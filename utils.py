@@ -2,6 +2,7 @@ import logging
 import os
 import numpy as np
 import torch
+import yacs
 
 IMAGE_EXTENSIONS = "jpg jpeg bmp png tif tiff".split()
 
@@ -124,3 +125,15 @@ def charbonnier_loss(input, target, reduction="mean", eps=1e-3):
         return l
     else:
         raise ValueError
+
+_VALID_TYPES = {tuple, list, str, int, float, bool}
+
+def yacs_to_dict(cfg_node, key_list=[]):
+    """ Convert a config node to dictionary """
+    if not isinstance(cfg_node, yacs.config.CfgNode):
+        return cfg_node
+    else:
+        cfg_dict = dict(cfg_node)
+        for k, v in cfg_dict.items():
+            cfg_dict[k] = yacs_to_dict(v, key_list + [k])
+        return cfg_dict

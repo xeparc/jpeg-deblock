@@ -6,7 +6,8 @@ import pytest
 import torch
 import torchvision
 
-from dataset import DatasetQuantizedJPEG, ToDCTTensor, ToQTTensor
+from dataset import DatasetQuantizedJPEG
+from models import ToDCTTensor, ToQTTensor
 from jpegutils import (
     JPEGTransforms,
     upsample_chrominance,

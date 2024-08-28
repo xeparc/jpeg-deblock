@@ -10,10 +10,15 @@ import torch.utils.data
 
 from dataset import (
     DatasetQuantizedJPEG,
-    ToDCTTensor,
-    ToQTTensor
 )
 from models import (
+    # Transforms
+    ConvertRGBToYcc,
+    ConvertYccToRGB,
+    InverseDCT,
+    ToDCTTensor,
+    ToQTTensor,
+    # Layers
     BlockEncoder,
     BlockDecoder,
     SpectralNet,
@@ -23,8 +28,6 @@ from models import (
     SpectralModel,
     ChromaNet,
     ConvNeXtBlock,
-    InverseDCT,
-    ConvertYccToRGB
 )
 from utils import CombinedLoss
 
@@ -69,14 +72,17 @@ def build_spectral_model(config):
 
 def build_idct(config):
     """Builds Inverse DCT transform Module."""
-    with open(config.DATA.DCT_STATS_FILEPATH, mode="rt") as f:
-        stats = json.load(f)
-        return InverseDCT(
-            luma_mean     = torch.as_tensor(stats["dct_Y_mean"]),
-            luma_std      = torch.as_tensor(stats["dct_Y_std"]),
-            chroma_mean   = torch.as_tensor(stats["dct_C_mean"]),
-            chroma_std    = torch.as_tensor(stats["dct_C_std"])
-        )
+    if config.DATA.NORMALIZE_DCT:
+        with open(config.DATA.DCT_STATS_FILEPATH, mode="rt") as f:
+            stats = json.load(f)
+            return InverseDCT(
+                luma_mean     = torch.as_tensor(stats["dct_Y_mean"]),
+                luma_std      = torch.as_tensor(stats["dct_Y_std"]),
+                chroma_mean   = torch.as_tensor(stats["dct_C_mean"]),
+                chroma_std    = torch.as_tensor(stats["dct_C_std"])
+            )
+    else:
+        return InverseDCT()
 
 
 def build_spectral_net(config):

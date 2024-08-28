@@ -214,163 +214,80 @@ class SRCNN(nn.Module):
         return y
 
 
-class Local2DAttentionLayer(nn.Module):
-
-    def __init__(self, kernel_size=7, embed_dim=128, num_heads=4, bias=True,
-                 add_bias_kqv=True):
-        super().__init__()
-        assert embed_dim % num_heads == 0
-        assert kernel_size % 2 == 1
-
-        self.kernel_size = kernel_size
-        self.embed_dim   = embed_dim
-        self.num_heads   = num_heads
-        self.bias        = bias
-        self.add_bias_kv = add_bias_kqv
-
-        # Local neighborhood patch unfold
-        p = kernel_size // 2
-        self.unfold = nn.Unfold(kernel_size, padding=(p, p), stride=1)
-        # self.project_q = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
-        # self.project_k = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
-        # self.project_v = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
-
-        conv_kwargs = dict(in_channels=embed_dim, out_channels=embed_dim,
-                           kernel_size=1, stride=1, padding=0, bias=add_bias_kqv)
-        # Q, K, V projections
-        self.project_q = nn.Conv2d(**conv_kwargs)
-        self.project_k = nn.Conv2d(**conv_kwargs)
-        self.project_v = nn.Conv2d(**conv_kwargs)
-
-        # Since no nonlinearity follows the projection matrices, we'll
-        # initialize them with Xavier's method
-        gain = 1 / 64
-        torch.nn.init.xavier_uniform_(self.project_q.weight, gain=gain)
-        torch.nn.init.xavier_uniform_(self.project_k.weight, gain=gain)
-        torch.nn.init.xavier_uniform_(self.project_v.weight, gain=gain)
-
-        # Relative positional encodings bias table
-        self.relative_positional_bias = nn.Parameter(
-            torch.zeros((num_heads, 1, kernel_size ** 2), dtype=torch.float32)
-        )
-
-    def forward(self, x):
-        """
-        Parameters:
-        ----------
-            x: torch.Tensor[N, E, H, W]
-        """
-        N, E, H, W = x.shape
-        P = self.kernel_size ** 2
-        L = H * W
-        Nh = self.num_heads
-        Hd = self.embed_dim // self.num_heads
-
-        # Project pixels / blocks into K, Q, V
-        keys   = self.project_k(x)
-        query  = self.project_q(x)
-        values = self.project_v(x)
-
-        # Then, extract local neighborhood patches for each
-        # pixel / block in `keys` and `values`
-        K = self.unfold(keys).reshape(N, E, P, L).contiguous().view(N, Nh, Hd, P, L)
-        V = self.unfold(values).reshape(N, E, P, L).contiguous().view(N, Nh, Hd, P, L)
-        Q = query.view(N, E, 1, L).contiguous().view(N, Nh, Hd, 1, L)
-
-        # K should be permuted to (N, L, Nh, P, Hd)
-        # Q should be permuted to (N, L, Nh, 1, Hd)
-        # V should be permuted to (N, L, Nh, P, Hd)
-        K = K.permute(0,4,1,3,2)
-        Q = Q.permute(0,4,1,3,2)
-        V = V.permute(0,4,1,3,2)
-
-        attn_weights = Q @ K.transpose(3, 4) / math.sqrt(self.embed_dim)
-        # attn_weights.shape == (N, L, Nh, 1, P)
-        attn_scores = attn_weights + self.relative_positional_bias.unsqueeze(0)
-        attn = nn.functional.softmax(attn_scores, dim=-1)
-
-        # (N, L, Nh, 1, P) @ (N, L, Nh, P, Hd) -> (N, L, Nh, 1, Hd)
-        out = (attn @ V).squeeze(dim=3)     # (N, L, Nh, Hd)
-        return out.reshape(N, H, W, E).permute(0,3,1,2), attn_scores
+# =========================================================================== #
+#                           TRANSFORM LAYERS
+# --------------------                                   -------------------- #
 
 
-class SpectralEncoderLayer(nn.Module):
-    """Expects input of shape (N, H, W, E)"""
+class  ToDCTTensor:
 
-    def __init__(self, window_size=7, d_model=128, num_heads=4,
-                 d_feedforward=512, dropout=0.1, activation=nn.GELU, bias=True,
-                 layer_norm_eps=1e-05, add_bias_kqv=True):
-
-        super().__init__()
-
-        self.window_size    = window_size
-        self.d_model        = d_model
-        self.num_heads      = num_heads
-        self.d_feedforward  = d_feedforward
-        self.dropout        = dropout
-        self.activation     = activation
-        self.layer_norm_eps = layer_norm_eps
-        self.bias           = bias
-        self.add_bias_kv    = add_bias_kqv
-
-        self.local_attention = Local2DAttentionLayer(
-            kernel_size=window_size,
-            embed_dim=d_model,
-            num_heads=num_heads,
-            bias=bias,
-            add_bias_kqv=add_bias_kqv,
-        )
-        self.layernorm1  = nn.LayerNorm(d_model, eps=layer_norm_eps)
-        self.layernorm2  = nn.LayerNorm(d_model, eps=layer_norm_eps)
-        self.activation  = activation
-        self.feedforward = nn.Sequential(
-            nn.Linear(in_features=d_model, out_features=d_feedforward),
-            activation(),
-            nn.Dropout(p=dropout),
-            nn.Linear(in_features=d_feedforward, out_features=d_model),
-        )
-
-    def forward(self, x: torch.tensor):
-        # N, H, W, E = x.shape
-        y0 = self.layernorm1(x)                                 # (N, H, W, E)
-        y1, _ = self.local_attention(y0.permute(0, 3, 1, 2))    # (N, E, H, W)
-        y2 = y1.permute(0, 2, 3, 1)                             # (N, H, W, E)
-        y3 = self.layernorm2(y2 + x)                            # (N, H, W, E)
-        return y2 + self.feedforward(y3)                        # (N, E, H, W)
-
-
-class SpectralEncoder(nn.Module):
-
-    def __init__(self, in_features=64, num_layers=4, window_size=7, d_model=128,
-                 d_qcoeff=64, num_heads=4, d_feedforward=1024, dropout=0.1,
-                 activation=nn.GELU, bias=True, add_bias_kqv=True
+    def __init__(self,
+                 luma_mean=None, luma_std=None,
+                 chroma_mean=None, chroma_std=None,
         ):
-        super().__init__()
+        if luma_mean is not None:
+            assert luma_mean.shape == (8,8)
+            self.luma_mean = torch.as_tensor(luma_mean).float()
+        else:
+            self.luma_mean = torch.zeros((8,8), dtype=torch.float32)
 
-        self.num_layers = num_layers
-        self.embed_dim  = d_model
+        if luma_std is not None:
+            assert luma_std.shape == (8,8)
+            self.luma_std = torch.as_tensor(luma_std).float()
+        else:
+            self.luma_std = torch.ones((8,8), dtype=torch.float32)
 
-        # Input Embedding Layer
-        self.input_embedding = nn.Linear(
-            in_features=in_features, out_features=d_model, bias=False)
+        if luma_mean is None and luma_std is None:
+            self.skip_luma = True
+        else:
+            self.skip_luma = False
 
-        self.positional_embedding = nn.Linear
-        encoders = [
-            SpectralEncoderLayer(window_size, d_model, d_qcoeff, num_heads,
-                                    d_feedforward, dropout, activation, bias,
-                                    add_bias_kqv=add_bias_kqv)
-                for _ in range(num_layers)
-        ]
-        self.encoders = nn.ModuleList(encoders)
+        if chroma_mean is not None:
+            assert chroma_mean.shape == (8,8)
+            self.chroma_mean = torch.as_tensor(chroma_mean).float()
+        else:
+            self.chroma_mean = torch.zeros((8,8), dtype=torch.float32)
 
-    def forward(self, x, qcoeff):
-        x = x.permute(0, 2, 3, 1)           # (N, H, W, C)
-        emb = self.input_embedding(x)       # (N, H, W, E)
-        z = emb.permute(0, 3, 1, 2)
-        for encoder in self.encoders:
-            z = encoder(z, qcoeff)
-        out = z
-        return out
+        if chroma_std is not None:
+            assert chroma_std.shape == (8,8)
+            self.chroma_std = torch.as_tensor(chroma_std).float()
+        else:
+            self.chroma_std = torch.ones((8,8), dtype=torch.float32)
+
+        if chroma_mean is None and chroma_std is None:
+            self.skip_chroma = True
+        else:
+            self.skip_chroma = False
+
+    def __call__(self, dct: np.ndarray, chroma: bool):
+        assert dct.ndim == 4
+        assert dct.shape[2] == dct.shape[3] == 8
+        out_shape = dct.shape[:-2] + (64,)
+        dct = torch.from_numpy(dct)
+        if chroma:
+            if self.skip_chroma:
+                res = dct
+            else:
+                res = (dct - self.chroma_mean) / self.chroma_std
+        else:
+            if self.skip_luma:
+                res = dct
+            else:
+                res = (dct - self.luma_mean) / self.luma_std
+        return res.view(out_shape).permute(2,0,1).contiguous()
+
+
+class ToQTTensor(nn.Module):
+
+    def __init__(self, invert=False):
+        self.invert = invert
+
+    def __call__(self, qtable: np.ndarray):
+        x = torch.as_tensor((qtable.astype(np.float32) - 1) / 254).ravel()
+        if self.invert:
+            return 1.0 - x
+        else:
+            return x
 
 
 class ConvertYccToRGB(torch.nn.Module):
@@ -428,7 +345,7 @@ class ConvertRGBToYcc(torch.nn.Module):
     def forward(self, x):
         yuv = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, x.transpose(0,1))
         yuv = yuv.transpose(0,1) + self.offset.view(1, 3, 1, 1)
-        return yuv.clip(min=0.0, max=1.0)
+        return yuv
 
 
 class ChromaCrop(torch.nn.Module):
@@ -477,7 +394,7 @@ class InverseDCT(torch.nn.Module):
             self.register_buffer("chroma_mean", torch.as_tensor(chroma_mean).float())
 
         if chroma_std is None:
-            self.register_buffer("chroma_std", torch.zeros(64).float())
+            self.register_buffer("chroma_std", torch.ones(64).float())
         else:
             self.register_buffer("chroma_std", torch.as_tensor(chroma_std).float())
 
@@ -494,10 +411,172 @@ class InverseDCT(torch.nn.Module):
         out = out.view(B, 1, 1, 8, 8, H, W)
         C = self.scale.view(1, 1, 1, 8, 8, 1, 1)
         basis = self.basis.view(1, 8, 8, 8, 8, 1, 1)
+        # Apply transform
         res = torch.sum(C * basis * out, dim=(3,4))         # (B, 8, 8, H, W)
         res = res.permute(0, 3, 1, 4, 2).contiguous()       # (B, H, 8, W, 8)
 
-        return (res.view(B, 1, 8*H, 8*W) + 128.0) / 255.0
+        return (res.view(B, 1, 8*H, 8*W) + 128) / 255.0
+
+
+class Local2DAttentionLayer(nn.Module):
+
+    def __init__(self, kernel_size: int, embed_dim: int, num_heads: int,
+                 bias=True, add_bias_kqv=True):
+        super().__init__()
+        assert embed_dim % num_heads == 0
+        assert kernel_size % 2 == 1
+
+        self.kernel_size = kernel_size
+        self.embed_dim   = embed_dim
+        self.num_heads   = num_heads
+        self.bias        = bias
+        self.add_bias_kv = add_bias_kqv
+
+        # Local neighborhood patch unfold
+        p = kernel_size // 2
+        self.unfold = nn.Unfold(kernel_size, padding=(p, p), stride=1)
+        # self.project_q = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
+        # self.project_k = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
+        # self.project_v = nn.Linear(embed_dim, embed_dim, bias=add_bias_kqv)
+
+        conv_kwargs = dict(in_channels=embed_dim, out_channels=embed_dim,
+                           kernel_size=1, stride=1, padding=0, bias=add_bias_kqv)
+        # Q, K, V projections
+        self.project_q = nn.Conv2d(**conv_kwargs)
+        self.project_k = nn.Conv2d(**conv_kwargs)
+        self.project_v = nn.Conv2d(**conv_kwargs)
+
+        # Since no nonlinearity follows the projection matrices, we'll
+        # initialize them with Xavier's method
+        gain = 1.0
+        torch.nn.init.xavier_uniform_(self.project_q.weight, gain=gain)
+        torch.nn.init.xavier_uniform_(self.project_k.weight, gain=gain)
+        torch.nn.init.xavier_uniform_(self.project_v.weight, gain=gain)
+
+        # Relative positional encodings bias table
+        self.relative_positional_bias = nn.Parameter(
+            torch.zeros((num_heads, 1, kernel_size ** 2), dtype=torch.float32)
+        )
+
+    def forward(self, x):
+        """
+        Parameters:
+        ----------
+            x: torch.Tensor[N, E, H, W]
+        """
+        N, E, H, W = x.shape
+        P = self.kernel_size ** 2
+        L = H * W
+        Nh = self.num_heads
+        dk = self.embed_dim // self.num_heads
+
+        # Project pixels / blocks into K, Q, V
+        keys   = self.project_k(x)
+        query  = self.project_q(x)
+        values = self.project_v(x)
+
+        # Then, extract local neighborhood patches for each
+        # pixel / block in `keys` and `values`
+        K = self.unfold(keys).reshape(N, E, P, L).contiguous().view(N, Nh, dk, P, L)
+        V = self.unfold(values).reshape(N, E, P, L).contiguous().view(N, Nh, dk, P, L)
+        Q = query.view(N, E, 1, L).contiguous().view(N, Nh, dk, 1, L)
+
+        # K should be permuted to (N, L, Nh, P, dk)
+        # Q should be permuted to (N, L, Nh, 1, dk)
+        # V should be permuted to (N, L, Nh, P, dk)
+        K = K.permute(0,4,1,3,2)
+        Q = Q.permute(0,4,1,3,2)
+        V = V.permute(0,4,1,3,2)
+
+        attn_weights = Q @ K.transpose(3, 4) / math.sqrt(self.embed_dim)
+        # attn_weights.shape == (N, L, Nh, 1, P)
+        attn_scores = attn_weights + self.relative_positional_bias.unsqueeze(0)
+        attn = nn.functional.softmax(attn_scores, dim=-1)
+
+        # (N, L, Nh, 1, P) @ (N, L, Nh, P, dk) -> (N, L, Nh, 1, dk)
+        out = (attn @ V).squeeze(dim=3)     # (N, L, Nh, dk)
+        return out.reshape(N, H, W, E).permute(0,3,1,2), attn_scores
+
+
+class SpectralEncoderLayer(nn.Module):
+    """Expects input of shape (N, H, W, E)"""
+
+    def __init__(self, window_size=7, d_model=128, num_heads=4,
+                 d_feedforward=512, dropout=0.1, activation=nn.GELU, bias=True,
+                 layer_norm_eps=1e-05, add_bias_kqv=True):
+
+        super().__init__()
+
+        self.window_size    = window_size
+        self.d_model        = d_model
+        self.num_heads      = num_heads
+        self.d_feedforward  = d_feedforward
+        self.dropout        = dropout
+        self.activation     = activation
+        self.layer_norm_eps = layer_norm_eps
+        self.bias           = bias
+        self.add_bias_kv    = add_bias_kqv
+
+        self.local_attention = Local2DAttentionLayer(
+            kernel_size=window_size,
+            embed_dim=d_model,
+            num_heads=num_heads,
+            bias=bias,
+            add_bias_kqv=add_bias_kqv,
+        )
+        self.layernorm1  = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.layernorm2  = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.activation  = activation
+        self.feedforward = nn.Sequential(
+            nn.Linear(in_features=d_model, out_features=d_feedforward),
+            activation(),
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features=d_feedforward, out_features=d_model),
+        )
+
+    def forward(self, x: torch.tensor):
+        # N, H, W, E = x.shape
+        y0 = self.layernorm1(x)                                 # (N, H, W, E)
+        y1, _ = self.local_attention(y0.permute(0, 3, 1, 2))    # (N, E, H, W)
+        y2 = y1.permute(0, 2, 3, 1)                             # (N, H, W, E)
+        # return x + y2
+        y3 = self.layernorm2(y2 + x)                            # (N, H, W, E)
+        return y2 + self.feedforward(y3)                        # (N, E, H, W)
+
+
+class SpectralEncoder(nn.Module):
+
+    def __init__(self, in_features=64, num_layers=4, window_size=7, d_model=128,
+                 d_qcoeff=64, num_heads=4, d_feedforward=1024, dropout=0.1,
+                 activation=nn.GELU, bias=True, add_bias_kqv=True
+        ):
+        super().__init__()
+
+        self.num_layers = num_layers
+        self.embed_dim  = d_model
+
+        # Input Embedding Layer
+        self.input_embedding = nn.Linear(
+            in_features=in_features, out_features=d_model, bias=False)
+
+        self.positional_embedding = nn.Linear
+        encoders = [
+            SpectralEncoderLayer(window_size, d_model, d_qcoeff, num_heads,
+                                    d_feedforward, dropout, activation, bias,
+                                    add_bias_kqv=add_bias_kqv)
+                for _ in range(num_layers)
+        ]
+        self.encoders = nn.ModuleList(encoders)
+
+    def forward(self, x, qcoeff):
+        x = x.permute(0, 2, 3, 1)           # (N, H, W, C)
+        emb = self.input_embedding(x)       # (N, H, W, E)
+        z = emb.permute(0, 3, 1, 2)
+        for encoder in self.encoders:
+            z = encoder(z, qcoeff)
+        out = z
+        return out
+
 
 
 class SpectralNet(nn.Module):
@@ -522,6 +601,7 @@ class SpectralNet(nn.Module):
                 x = block(x, chroma)
         out = self.output_transform(dct_tensor + x, chroma)
         return out
+
 
 class BlockEncoder(nn.Module):
     """Encodes DCT tensor with shape (N, 64, H, W) to embedding vectors with
@@ -565,6 +645,7 @@ class BlockEncoder(nn.Module):
             return self._forward_concat(dctensor, qt)
         elif self.interaction == "none":
             return self.project(dctensor).permute(0,2,3,1)
+
 
 class BlockDecoder(nn.Module):
     """Decodes embedding tensor with shape (N, H, W, E) to DCT residual with
@@ -618,7 +699,7 @@ class SpectralModel(nn.Module):
         emb = self.block_encoder(dct, qt)       # (N, H, W, E)
         y = self.transformer(emb)               # (N, H, W, E)
         residual = self.block_decoder(y, qt)    # (N, `DIM_QTABLE`, H, W)
-        return dct + 0.0 * residual
+        return dct + residual
 
 
 class ConvNeXtBlock(nn.Module):

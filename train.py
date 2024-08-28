@@ -8,6 +8,7 @@ import yaml
 
 import numpy as np
 from yacs.config import CfgNode
+import wandb
 
 from config import default_config, get_config
 from builders import *
@@ -22,37 +23,53 @@ from utils import (
     save_checkpoint,
     load_checkpoint,
     charbonnier_loss,
-    is_image
+    is_image,
+    yacs_to_dict
 )
 
 
 
 def main(cfg):
 
+    # Init device
     device = torch.device(cfg.TRAIN.DEVICE)
 
+    # Init WANDB (is config flag for it is on)
+    if cfg.LOGGING.WANDB:
+        wandb.init(project=cfg.TAG, config=yacs_to_dict(cfg))
+
+    # Init dataloaders
     train_loader    = build_dataloader(cfg, "train")
     val_loader      = build_dataloader(cfg, "val")
 
+    # Init models
     if cfg.MODEL.SHARED_LUMA_CHROMA:
         spectral_luma   = build_spectral_model(cfg).to(device)
         spectral_chroma = build_spectral_model(cfg).to(device)
         optim           = build_optimizer(cfg, spectral_luma.parameters(),
                                                spectral_chroma.parameters())
+        if cfg.LOGGING.WANDB:
+            wandb.watch((spectral_luma, spectral_chroma), log="all",
+                        log_freq=100, log_graph=True)
     else:
         spectral        = build_spectral_model(cfg).to(device)
         spectral_luma   = spectral
         spectral_chroma = spectral
         optim           = build_optimizer(cfg, spectral.parameters())
+        if cfg.LOGGING.WANDB:
+            wandb.watch(spectral, log="all", log_freq=100, log_graph=True)
 
+    # Init optimizer
     lr_scheduler    = build_lr_scheduler(cfg, optim)
     logger          = build_logger(cfg)
-    monitor         = TrainingMonitor(logger)
+    monitor         = TrainingMonitor(logger, cfg.LOGGING.WANDB)
 
+    # Create checkpoint directory
     if cfg.TRAIN.CHECKPOINT_EVERY > 0:
         os.makedirs(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.MODEL.NAME),
                     exist_ok=True)
 
+    # Jump to training loop
     train_validate_test_loop_spectral(
         config=             cfg,
         spectral_luma=      spectral_luma,
@@ -64,35 +81,8 @@ def main(cfg):
         monitor=            monitor
     )
 
-
-
-# def predict_train(spectral_net, chroma_net, datapoint, subsample: str):
-#     input_yy_dct =  datapoint["lq_dct_y"]
-#     input_cb_dct =  datapoint["lq_dct_cb"]
-#     input_cr_dct =  datapoint["lq_dct_cr"]
-#     qt_luma =       datapoint["qt_y"]
-#     qt_chroma =     datapoint["qt_c"]
-
-#     out_yy = spectral_net(input_yy_dct, qt_luma, chroma=False)
-#     out_cb = spectral_net(input_cb_dct, qt_chroma, chroma=True)
-#     out_cr = spectral_net(input_cr_dct, qt_chroma, chroma=True)
-
-#     scale = SUBSAMPLE_FACTORS[subsample]
-
-#     # Upsample chroma components
-#     upsampled_cb = torch.nn.functional.interpolate(
-#         out_cb, scale_factor=scale, mode="nearest"
-#     )
-#     upsampled_cr = torch.nn.functional.interpolate(
-#         out_cr, scale_factor=scale, mode="nearest"
-#     )
-
-#     # Concatenate Y, Cb+, Cr+ planes
-#     ycc = torch.concatenate([out_yy, upsampled_cb, upsampled_cr], dim=1)
-#     enhanced = chroma_net(ycc)
-#     assert ycc.shape[1] == 3
-
-#     return {"Y": out_yy, "Cb": out_cb, "Cr": out_cr, "final": enhanced}
+    if cfg.LOGGING.WANDB:
+        wandb.finish()
 
 
 def clip_gradients(model, max_norm: float, how: str):
@@ -137,21 +127,21 @@ def spectral_loss(config, prediction: dict, target: dict, monitor, **kwargs):
         lossCr = criterion(prediction["dctCr"], target["dctCr"], **kwargs)
         # Track loss. Explicitly use mean(), because kwargs may contain
         # reduction="none"
-        monitor.add_scalar("loss-dct-Y", lossY.detach().cpu().mean().item())
-        monitor.add_scalar("loss-dct-Cb", lossCb.detach().cpu().mean().item())
-        monitor.add_scalar("loss-dct-Cr", lossCr.detach().cpu().mean().item())
+        monitor.add_scalar("loss/dct-Y", lossY.detach().cpu().mean().item())
+        monitor.add_scalar("loss/dct-Cb", lossCb.detach().cpu().mean().item())
+        monitor.add_scalar("loss/dct-Cr", lossCr.detach().cpu().mean().item())
         return luma_weight * lossY + chroma_weight * (lossCb + lossCr)
     elif output_type == "ycc":
         loss = criterion(prediction["ycc"], target["ycc"], **kwargs)
         # Track loss. Explicitly use mean(), because kwargs may contain
         # reduction="none"
-        monitor.add_scalar("loss", loss.detach().cpu().mean().item())
+        monitor.add_scalar("loss/YCbCr", loss.detach().cpu().mean().item())
         return loss
     elif output_type == "rgb":
         loss = criterion(prediction["rgb"], target["rgb"], **kwargs)
         # Track loss. Explicitly use mean(), because kwargs may contain
         # reduction="none"
-        monitor.add_scalar("rgb", loss.detach().cpu().mean().item())
+        monitor.add_scalar("loss/rgb", loss.detach().cpu().mean().item())
         return loss
     else:
         raise ValueError
@@ -179,7 +169,7 @@ def validate_spectral(
     for batch in dataloader:
         quality = batch["quality"]
         # Run forward pass, make predictions
-        preds = predict_spectral(spectral_luma, spectral_chroma, batch,
+        preds = predict_spectral(config, spectral_luma, spectral_chroma, batch,
                                  out_transform, subsample)
         targets = {"dctY": batch["hq_dct_y"], "dctCb": batch["hq_dct_cb"],
                    "dctCr": batch["hq_dct_cr"]}
@@ -199,32 +189,18 @@ def validate_spectral(
             psnrs.setdefault(key, []).append(-10.0 * np.log10(l - 1e-6))
 
     bins = sorted(losses.keys())
-
-    mean_       = [np.mean(losses[k]) for k in bins]
-    min_        = [np.min(losses[k]) for k in bins]
-    max_        = [np.max(losses[k]) for k in bins]
-    std_        = [np.std(losses[k]) for k in bins]
-
-    mean_psnr_  = [np.mean(psnrs[k]) for k in bins]
-    min_psnr_   = [np.min(psnrs[k]) for k in bins]
-    max_psnr_   = [np.max(psnrs[k]) for k in bins]
-    std_psnr_   = [np.std(psnrs[k]) for k in bins]
+    mean_  = [np.mean(losses[k]) for k in bins]
+    psnr_  = [np.mean(psnrs[k]) for k in bins]
+    for i in range(len(bins)):
+        k = bins[i]
+        monitor.add_scalar(f"validation/loss-q=[{k},{k+10}]", mean_[i])
+        monitor.add_scalar(f"validation/psnr-q=[{k},{k+10}]", psnr_[i])
 
     t = int(time.time() - tic)
     monitor.add_scalar("validation-time", t)
     monitor.log(logging.INFO,
                 f"validate_spectral() took {datetime.timedelta(seconds=t)}")
-
-    monitor.add_histogram("validation-loss-mean", bins, mean_)
-    monitor.add_histogram("validation-loss-min", bins, min_)
-    monitor.add_histogram("validation-loss-max", bins, max_)
-    monitor.add_histogram("validation-loss-std", bins, std_)
-
-    monitor.add_histogram("validation-psnr-mean", bins, mean_psnr_)
-    monitor.add_histogram("validation-psnr-min", bins, min_psnr_)
-    monitor.add_histogram("validation-psnr-max", bins, max_psnr_)
-    monitor.add_histogram("validation-psnr-std", bins, std_psnr_)
-
+    monitor.step()
 
 
 @torch.no_grad()
@@ -276,6 +252,7 @@ def train_spectral(
 
     while current_iter < max_iters:
         for batch in dataloader:
+            monitor.step()
             current_iter += 1
             if current_iter >= max_iters:
                 break
@@ -291,8 +268,8 @@ def train_spectral(
 
             # Run forward pass, make predictions
             tic = time.time()
-            preds = predict_spectral(spectral_luma, spectral_chroma, batch,
-                                     out_transform, subsample)
+            preds = predict_spectral(config, spectral_luma, spectral_chroma,
+                                     batch, out_transform, subsample)
 
             # Calculate loss
             loss = spectral_loss(config, preds, targets, monitor) / accum
@@ -301,7 +278,7 @@ def train_spectral(
             # Update parameters
             if current_iter % accum == 0:
                 # Clip gradients
-                clip_gradients(spectral_luma, max_norm, clip_grad_method)
+                # clip_gradients(spectral_luma, max_norm, clip_grad_method)
                 optimizer.step()
                 lr_scheduler.step()
 
@@ -311,14 +288,12 @@ def train_spectral(
             lr_   = lr_scheduler.get_last_lr()[0]
             eta   = int(batch_time * (total_iters - current_iter))
 
-            monitor.add_scalar("iteration", current_iter)
-            monitor.add_scalar("batch-time", batch_time)
-            monitor.add_scalar("loss", loss_)
+            monitor.add_scalar("loss/total", loss_)
             monitor.add_scalar("learning-rate", lr_)
             # Log stats
             if current_iter % log_every == 0:
                 monitor.log(
-                    logging.ERROR,
+                    logging.INFO,
                     f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
                     f"time: {batch_time:.2f}\t"
                     f"eta: {datetime.timedelta(seconds=eta)}\t"

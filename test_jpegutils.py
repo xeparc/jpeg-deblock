@@ -26,11 +26,12 @@ from jpegutils import (
     to_data_units,
     SUBSAMPLE_FACTORS
 )
+from utils import is_image
 
 
 TEST_IMAGES_DIR = "data/Live1-Classic5/live1/refimgs/"
 TEST_IMAGE_PATHS = [x.path for x in os.scandir(TEST_IMAGES_DIR)]
-TEST_IMAGES = [np.array(Image.open(path)) for path in TEST_IMAGE_PATHS]
+TEST_IMAGES = [np.array(Image.open(path)) for path in TEST_IMAGE_PATHS if is_image(path)]
 
 
 # def test_yuv2rgb_conversion(save=False):
@@ -40,7 +41,7 @@ TEST_IMAGES = [np.array(Image.open(path)) for path in TEST_IMAGE_PATHS]
 
 #     failed = []
 #     deltas = []
-    
+
 #     for item in os.scandir(TEST_IMAGES_DIR):
 #         extension = item.name.split('.')[-1]
 #         if extension not in ("jpg", "jpeg", "png", "bmp", "tif", "tiff"):
@@ -86,7 +87,7 @@ TEST_IMAGES = [np.array(Image.open(path)) for path in TEST_IMAGE_PATHS]
 
 #     failed = []
 #     deltas = []
-    
+
 #     for item in os.scandir(images_dir):
 #         extension = item.name.split('.')[-1]
 #         if extension not in ("jpg", "jpeg", "png", "bmp", "tif", "tiff"):
@@ -222,7 +223,7 @@ def test_to_data_units(image, subsample):
                          list(product(TEST_IMAGE_PATHS,
                                       (10,15,20,30,50,80),
                                       )))
-def test_encoding(image_path, quality, subsample="444", saveimgs=True):
+def test_encoding(image_path, quality, subsample=444, saveimgs=True):
 
     image = np.array(Image.open(image_path))
     h, w = image.shape[:2]
@@ -235,17 +236,17 @@ def test_encoding(image_path, quality, subsample="444", saveimgs=True):
         name2 = name + f"-quality={quality}-{subsample}-turbojpeg.jpg"
 
     tjsample = {
-        "444": TJSAMP_444,
-        "440": TJSAMP_440,
-        "422": TJSAMP_422,
-        "411": TJSAMP_411,
-        "420": TJSAMP_420
+        444: TJSAMP_444,
+        440: TJSAMP_440,
+        422: TJSAMP_422,
+        411: TJSAMP_411,
+        420: TJSAMP_420
     }
 
     jpeg = JPEGTransforms(image)
     enc = jpeg.encode(quality, subsample)
     compressed = jpeg.decode_rgb(enc, subsample)
-    
+
     # Save the image with in-memory quantization
     if saveimgs:
         torchvision.io.write_png(
