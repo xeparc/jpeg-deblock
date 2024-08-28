@@ -1,0 +1,79 @@
+
+SEED: 7
+
+DATA:
+  PIN_MEMORY: False
+  NAME: "DIV2K+Flickr2K"
+  LOCATIONS:
+    TRAIN: ["data/DIV2K/DIV2K_train_HR", data/Flickr2K/]
+    VAL: ["data/DIV2K/DIV2K_valid_HR/"]
+    TEST: ["data/10/", "data/20/", "data/30/", "data/40/"]
+  PATCH_SIZE: 80
+  NUM_PATCHES: 16
+  SUBSAMPLE: 444
+  MIN_QUALITY: 10
+  MAX_QUALITY: 40
+  TARGET_QUALITY: 100
+  CACHED: False
+  USE_LQ_RGB: False
+  USE_LQ_YCC: False
+  USE_LQ_DCT: True
+  USE_HQ_RGB: True
+  USE_HQ_YCC: True
+  USE_HQ_DCT: True
+  USE_QTABLES: True
+  NORMALIZE_RGB: False
+  NORMALIZE_YCC: False
+  NORMALIZE_DCT: True
+  INVERT_QT: False
+  DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
+  PIN_MEMORY: False
+  PIN_MEMORY_DEVICE: ''
+  SHUFFLE: True
+  NUM_WORKERS: 0
+MODEL:
+  RESUME: ''
+  NAME: medium-spectral-topleft-coefficients
+  SHARED_LUMA_CHROMA: False
+  ENCODER_INTERACTION: "FiLM"
+  DECODER_INTERACTION: "FiLM"
+  SPECTRAL:
+    INPUT_DIM: 64
+    DEPTH: 4
+    EMBED_DIM: 128
+    WINDOW_SIZES: [7, 7, 5, 5]
+    NUM_HEADS: [4, 4, 4, 4]
+    MLP_DIMS: [256, 256, 256, 256]
+    QKV_BIAS: True
+    DROPOUTS: [0.0, 0.0, 0.0, 0.0]
+    OUTPUT_TRANSFORM: "identity"
+TRAIN:
+  DEVICE: "mps"
+  BATCH_SIZE: 64
+  NUM_ITERATIONS: 50000
+  WARMUP_ITERATIONS: 1000
+  CLIP_GRAD: 10.0
+  CLIP_GRAD_METHOD: "total"
+  BASE_LR: 1.0e-3
+  WARMUP_LR: 5.0e-4
+  LR_SCHEDULER:
+    NAME: cosine
+    KWARGS: [[T_0, 5000], [eta_min, 5.0e-6], [T_mult, 2]]
+    WARMUP_PREFIX: True
+  CHECKPOINT_EVERY: 100
+  CHECKPOINT_DIR: checkpoints/
+VALIDATION:
+  BATCH_SIZE: 32
+  EVERY: 100
+LOGGING:
+  LOG_EVERY: 10
+  WANDB: True
+LOSS:
+  CRITERION: mse
+  LUMA_WEIGHT: 1.0
+  CHROMA_WEIGHT: 0.25
+  ALPHA: 1.0
+  BETA: 0.0
+
+
+TAG: medium-spectral-22-256-topleft

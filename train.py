@@ -122,7 +122,8 @@ def spectral_loss(config, prediction: dict, target: dict, monitor, **kwargs):
         criterion = charbonnier_loss
 
     if output_type == "identity":
-        indices = [0,1,2,3,4,5,6,7,8,9,16,24,32,40,48,56]
+        # indices = [0,1,2,3,4,5,6,7,8,9,16,24,32,40,48,56]
+        indices = [0,1,2,3,4,8,9,10,11,16,17,18,24,25,32]
         lossY  = criterion(prediction["dctY"][:,indices], target["dctY"][:,indices], **kwargs)
         lossCb = criterion(prediction["dctCb"][:,indices], target["dctCb"][:,indices], **kwargs)
         lossCr = criterion(prediction["dctCr"][:,indices], target["dctCr"][:,indices], **kwargs)
