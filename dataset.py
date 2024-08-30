@@ -339,6 +339,122 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         return res
 
 
+class DatasetQualityAssesment(torch.utils.data.Dataset):
+
+    def __init__(
+            self,
+            image_dirs: Union[str, collections.abc.Iterable],
+            patch_size: int,
+            num_patches: int,
+            min_quality: int,
+            max_quality: int,
+            target_map: dict,
+            subsample: int,
+            seed = None,
+            device = "cpu",
+    ):
+
+        if isinstance(image_dirs, str):
+            image_dirs = (image_dirs,)
+
+        assert subsample in (444, 422, 420, 411, 440)
+        assert 1 <= min_quality <= max_quality <= 100
+        assert 1 <= patch_size
+
+        self.patch_size = patch_size
+        self.subsample = subsample
+        self.min_quality = min_quality
+        self.max_quality = max_quality
+        self.num_patches = num_patches
+        self.transform_rgb = torchvision.transforms.ToTensor()
+        self.transform_ycc = torchvision.transforms.ToTensor()
+        self.target_map = target_map
+        self.seed = seed
+        self.device = torch.device(device)
+
+        self.image_paths = []
+        for _dir in image_dirs:
+            assert os.path.exists(_dir)
+            for root, _, filenames in os.walk(_dir):
+                for fname in filter(is_image, filenames):
+                    self.image_paths.append(os.path.join(root, fname))
+
+        self.crop = torchvision.transforms.RandomCrop(size=self.patch_size)
+        self.rng = np.random.default_rng(self.seed)
+
+    def __len__(self) -> int:
+        return len(self.image_paths)
+
+    def __getitem__(self, index: int) -> dict:
+        # Get filepath of image
+        impath = self.image_paths[index]
+        # Read image
+        image = Image.open(impath)
+
+        # Sample array of JPEG qualities
+        qualities = self.rng.integers(
+            self.min_quality, self.max_quality, size=self.num_patches)
+
+        transform_rgb = self.transform_rgb
+        transform_ycc = self.transform_ycc
+        result = defaultdict(list)
+
+        # Extract patches
+        for quality in qualities:
+            quality = quality
+            # Crop patch
+            patch = self.crop(image)
+            patchT = JPEGTransforms(np.array(patch))
+            # Save metadata
+            result["filepath"].append(impath)
+            result["quality"].append(quality)
+
+            target = None
+            for k, v in self.target_map.items():
+                if v[0] <= quality <= v[1]:
+                    target = k
+                    break
+            if target is None:
+                raise ValueError
+            result["target"].append((target))
+
+            quantized = patchT.encode(quality=quality, subsample=self.subsample)
+            quantized_rgb = patchT.decode_rgb(quantized, subsample=self.subsample)
+            quantizedT = JPEGTransforms(quantized_rgb)
+
+            # Low quality RGB
+            if self.use_lq_rgb:
+                result["lq_rgb"].append(transform_rgb(quantizedT.get_rgb()))
+            # Low quality YCbCr
+            if self.use_lq_ycc:
+                y, cb, cr = quantizedT.get_ycc_planes(self.subsample)
+                result["lq_y"].append(transform_ycc(y))
+                result["lq_cb"].append(transform_ycc(cb))
+                result["lq_cr"].append(transform_ycc(cr))
+
+        if self.num_patches == 1:
+            return {k: v[0] for k,v in result.items()}
+        else:
+            return result
+
+    @staticmethod
+    def collate_fn(batch, device):
+        temp = {}
+        for item in batch:
+            for k, v in item.items():
+                if isinstance(v, list):
+                    temp.setdefault(k, []).extend(v)
+                else:
+                    temp.setdefault(k, []).append(v)
+        res = {}
+        for k, collection in temp.items():
+            if isinstance(collection[0], torch.Tensor):
+                res[k] = torch.stack(collection, dim=0).to(device=device)
+            else:
+                res[k] = collection
+        return res
+
+
 def encode_and_save_jpegs(input_dir, output_dir, quality=(80, 60, 40, 30, 20, 10)):
     """
     Re-encodes every JPEG image in `input_dir` (recursively) with quality Q and
