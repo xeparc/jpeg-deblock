@@ -348,6 +348,112 @@ class ConvertRGBToYcc(torch.nn.Module):
         return yuv
 
 
+class ConvertDCTtoRGB(torch.nn.Module):
+    
+    def __init__(self, luma_mean=None, luma_std=None,
+                 chroma_mean=None, chroma_std=None):
+        super().__init__()
+        self.idct = InverseDCT(luma_mean, luma_std, chroma_mean, chroma_std)
+        self.to_rgb = ConvertYccToRGB()
+    
+    def forward(self, x, chroma):
+        return self.to_rgb(self.idct(x, chroma))
+
+
+class Blockify(torch.nn.Module):
+
+    def __init__(self, block_size):
+        super().__init__()
+        self.block_size = block_size
+
+    def forward(self, x, flatten=False):
+        N, C, H, W = x.shape
+        k = self.block_size
+        pad_h = int(math.ceil(H / k) * k) - H
+        pad_w = int(math.ceil(W / k) * k) - W
+        num_blocks_h = (H + pad_h) // k
+        num_blocks_w = (W + pad_w) // k
+        canvas = torch.nn.functional.pad(x, (0, pad_h, 0, pad_w), mode="replicate")
+        canvas = canvas.reshape(N, C, num_blocks_h, k, num_blocks_w, k)
+        res = canvas.permute(0, 1, 2, 4, 3, 5)
+        if flatten:
+            return res.reshape(N, C, num_blocks_h, num_blocks_w, k ** 2)
+        else:
+            return res.reshape(N, C, num_blocks_h, num_blocks_w, k, k)
+
+
+# class Deblockify(torch.nn.Module):
+
+#     def __init__(self, block_size):
+#         super().__init__()
+#         self.block_size = block_size
+
+#     def forward(self, x):
+#         N, C, H, W, L = x.shape
+
+
+# class DiscreteCosineTransform(torch.nn.Module):
+
+
+#     def __init__(self, luma_mean=None, luma_std=None,
+#                  chroma_mean=None, chroma_std=None):
+
+#         super().__init__()
+
+#         # Make Type III harmonics
+#         steps = torch.arange(8, requires_grad=False) / 16
+#         f = 2 * torch.arange(8, requires_grad=False) + 1
+#         h1 = torch.cos(torch.outer(steps, f * torch.pi))
+#         h2 = h1.clone()
+#         # Make IDCT basis
+#         basis = h1.T.view(8, 1, 8, 1) * h2.T.view(1, 8, 1, 8)
+#         self.register_buffer("basis", basis)        # (8,8, 8,8)
+#         # Make normalization matrix
+#         c = torch.ones(8, dtype=torch.float32)
+#         c[0] = torch.sqrt(torch.tensor(0.5, dtype=torch.float32))
+#         C = 0.25 * torch.outer(c, c)
+#         self.register_buffer("scale", C)
+
+#         if luma_mean is None:
+#             self.register_buffer("luma_mean", torch.zeros(64).float())
+#         else:
+#             self.register_buffer("luma_mean", torch.as_tensor(luma_mean).float())
+
+#         if luma_std is None:
+#             self.register_buffer("luma_std", torch.ones(64).float())
+#         else:
+#             self.register_buffer("luma_std", torch.as_tensor(luma_std).float())
+
+#         if chroma_mean is None:
+#             self.register_buffer("chroma_mean", torch.zeros(64).float())
+#         else:
+#             self.register_buffer("chroma_mean", torch.as_tensor(chroma_mean).float())
+
+#         if chroma_std is None:
+#             self.register_buffer("chroma_std", torch.ones(64).float())
+#         else:
+#             self.register_buffer("chroma_std", torch.as_tensor(chroma_std).float())
+
+#     def forward(self, dct: torch.FloatTensor, chroma: bool):
+#         # (B, 64, H, W)
+#         B, C, H, W = dct.shape
+#         assert C == 64
+#         # Normalize
+#         if chroma:
+#             out = dct * self.chroma_std.view(1, 64, 1, 1) + self.chroma_mean.view(1, 64, 1, 1)
+#         else:
+#             out = dct * self.luma_std.view(1, 64, 1, 1) + self.luma_mean.view(1, 64, 1, 1)
+#         # Reshape
+#         out = out.view(B, 1, 1, 8, 8, H, W)
+#         C = self.scale.view(1, 1, 1, 8, 8, 1, 1)
+#         basis = self.basis.view(1, 8, 8, 8, 8, 1, 1)
+#         # Apply transform
+#         res = torch.sum(C * basis * out, dim=(3,4))         # (B, 8, 8, H, W)
+#         res = res.permute(0, 3, 1, 4, 2).contiguous()       # (B, H, 8, W, 8)
+
+#         return (res.view(B, 1, 8*H, 8*W) + 128) / 255.0
+
+
 class ChromaCrop(torch.nn.Module):
 
     def __init__(self, height: int, width: int):
@@ -474,6 +580,7 @@ class Local2DAttentionLayer(nn.Module):
         keys   = self.project_k(x)
         query  = self.project_q(x)
         values = self.project_v(x)
+        # values = x
 
         # Then, extract local neighborhood patches for each
         # pixel / block in `keys` and `values`
