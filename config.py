@@ -102,6 +102,22 @@ _C.MODEL.CHROMA.BODY_KERNEL_SIZE = 3
 _C.MODEL.CHROMA.LEAF_KERNEL_SIZE = 3
 
 
+# Quality Assessment Model
+_C.MODEL.GRADE = CN()
+_C.MODEL.GRADE.DEPTHS = [1, 3, 6, 3]
+_C.MODEL.GRADE.DIMS = [32, 64, 128, 256]
+_C.MODEL.GRADE.IN_CHANNELS = 3
+_C.MODEL.GRADE.NUM_OUTPUTS = 1
+_C.MODEL.GRADE.STEM_KERNEL_SIZE = 7
+_C.MODEL.GRADE.STEM_STRIDE = 4
+
+
+# ConvNeXt IR Model
+_C.MODEL.CONVNEXTIR = CN()
+_C.MODEL.CONVNEXTIR.DEPTHS = [1,2,4,1]
+_C.MODEL.CONVNEXTIR.DIMS = [64, 128, 128, 32]
+_C.MODEL.CONVNEXTIR.IN_CHANNELS = 3
+
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------
