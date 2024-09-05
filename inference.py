@@ -12,7 +12,7 @@ from jpegutils import (
     JPEGTransforms,
     SUBSAMPLE_FACTORS
 )
-from models import (
+from models.models import (
     ConvertYccToRGB,
     InverseDCT,
     ToQTTensor,

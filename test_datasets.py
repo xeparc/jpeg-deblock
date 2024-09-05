@@ -7,13 +7,13 @@ import torch
 import torchvision
 
 from dataset import DatasetQuantizedJPEG
-from models import ToDCTTensor, ToQTTensor
+from models.models import ToDCTTensor, ToQTTensor
 from jpegutils import (
     JPEGTransforms,
     upsample_chrominance,
     ycc2rgb,
 )
-from models import InverseDCT
+from models.models import InverseDCT
 
 
 TEST_DATASET_DIR = "data/Live1-Classic5/live1/refimgs/"

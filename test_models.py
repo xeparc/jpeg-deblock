@@ -11,7 +11,7 @@ import time
 from PIL import Image
 from timeit import timeit, Timer
 
-from models import (
+from models.models import (
     ToDCTTensor,
     InverseDCT,
     ConvertYccToRGB,

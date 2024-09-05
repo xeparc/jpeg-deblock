@@ -11,7 +11,7 @@ import torch.utils.data
 from dataset import (
     DatasetQuantizedJPEG,
 )
-from models import (
+from models.models import (
     # Transforms
     ConvertRGBToYcc,
     ConvertYccToRGB,
@@ -28,6 +28,7 @@ from models import (
     SpectralModel,
     ChromaNet,
     ConvNeXtBlock,
+    GradeModel
 )
 from utils import CombinedLoss
 
@@ -68,6 +69,19 @@ def build_spectral_model(config):
     transformer = SpectralTransformer(layers)
     encoder, decoder = build_block_encoder_decoder(config)
     return SpectralModel(encoder, transformer, decoder)
+
+
+def build_grade_model(config):
+
+    model = GradeModel(
+        in_channels=        config.MODEL.GRADE.IN_CHANNELS,
+        num_outputs=        config.MODEL.GRADE.NUM_OUTPUTS,
+        depths=             config.MODEL.GRADE.DEPTHS,
+        dims=               config.MODEL.GRADE.DIMS,
+        stem_kernel_size=   config.MODEL.GRADE.STEM_KERNEL_SIZE,
+        stem_stride=        config.MODEL.GRADE.STEM_STRIDE
+    )
+    return model
 
 
 def build_idct(config):
@@ -250,6 +264,18 @@ def build_optimizer(config, *params):
 
     if name == "adamw":
         optim = torch.optim.AdamW(
+            params=[{"params": p} for p in params],
+            lr=config.TRAIN.BASE_LR,
+            **kwargs
+        )
+    elif name == "sgd":
+        optim = torch.optim.SGD(
+            params=[{"params": p} for p in params],
+            lr=config.TRAIN.BASE_LR,
+            **kwargs
+        )
+    elif name == "rmsprop":
+        optim = torch.optim.RMSprop(
             params=[{"params": p} for p in params],
             lr=config.TRAIN.BASE_LR,
             **kwargs
