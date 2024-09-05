@@ -124,6 +124,7 @@ class TrainingMonitor:
             ax.set_ylabel("value")
             fig.savefig(os.path.join(savedir, parts, name + ".png"), dpi=160)
             plt.close(fig)
+        plt.close("all")
 
     def step(self):
         self._step += 1
