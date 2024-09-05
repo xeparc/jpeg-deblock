@@ -7,7 +7,7 @@ import numpy as np
 import torch.nn as nn
 import torch.utils
 
-from models import SRCNN
+from models.models import SRCNN
 
 
 TRAIN_PATH = "BSDS500/BSDS500/data/images/train/"
@@ -64,7 +64,7 @@ class DatasetRescale(torch.utils.data.Dataset):
 
         # Load images
         self.inputs = []
-        self.targets = [] 
+        self.targets = []
         for item in os.scandir(self.img_dir):
             if item.name.endswith(".jpg"):
                 img = torchvision.io.read_image(item.path)
@@ -131,7 +131,7 @@ class DatasetRescalePatches(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.inputs)
-    
+
     def __getitem__(self, idx):
         image, target = self.inputs[idx], self.targets[idx]
         # Convert to float
