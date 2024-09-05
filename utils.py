@@ -5,6 +5,7 @@ import torch
 import yacs
 
 IMAGE_EXTENSIONS = "jpg jpeg bmp png tif tiff".split()
+_VALID_TYPES = {tuple, list, str, int, float, bool}
 
 def is_image(filepath):
     name = os.path.basename(filepath)
@@ -126,7 +127,6 @@ def charbonnier_loss(input, target, reduction="mean", eps=1e-3):
     else:
         raise ValueError
 
-_VALID_TYPES = {tuple, list, str, int, float, bool}
 
 def yacs_to_dict(cfg_node, key_list=[]):
     """ Convert a config node to dictionary """
@@ -137,3 +137,30 @@ def yacs_to_dict(cfg_node, key_list=[]):
         for k, v in cfg_dict.items():
             cfg_dict[k] = yacs_to_dict(v, key_list + [k])
         return cfg_dict
+
+
+def clip_gradients(model, max_norm: float, how: str):
+
+    model_name = type(model).__name__
+    result = {}
+
+    if how == "total":
+        parameters = model.parameters()
+        g = torch.nn.utils.clip_grad_norm_(parameters, max_norm,
+                                           error_if_nonfinite=True)
+        result[model_name] = g.item()
+    elif how == "param":
+        for name, param in model.named_parameters():
+            g = torch.nn.utils.clip_grad_norm_([param], max_norm,
+                                               error_if_nonfinite=True)
+            result[name] = g.item()
+    return result
+
+
+def get_alloc_memory(config):
+    if config.TRAIN.DEVICE == "cuda":
+        return torch.cuda.max_memory_allocated() / (2 ** 20)
+    elif config.TRAIN.DEVICE == "mps":
+        return torch.mps.current_allocated_memory() / (2 ** 20)
+    else:
+        return 0.0
