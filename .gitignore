@@ -3,7 +3,6 @@ data/
 logs/
 checkpoints/
 configs/
-models/
 literature/
 wandb/
 *.pdf
