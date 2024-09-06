@@ -60,6 +60,7 @@ _C.DATA.NORMALIZE_DCT = True
 # If True, map [1, 255] quantization table range to [1, 0].
 # If False, map [1, 255] quantization table range to [0, 1].
 _C.DATA.INVERT_QT = False
+# Path to JSON file with DCT coefficients mean and std. Used for normalization.
 _C.DATA.DCT_STATS_FILEPATH = "data/DIV2K+Flickr2K-dct-stats.json"
 # Unused
 _C.DATA.PIN_MEMORY = False
@@ -77,7 +78,6 @@ _C.DATA.NUM_WORKERS = 0
 _C.MODEL = CN()
 _C.MODEL.NAME = ""
 # _C.MODEL.RGB_OUTPUT = True
-_C.MODEL.RESUME = ''
 # If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
 _C.MODEL.SHARED_LUMA_CHROMA = True
 
@@ -146,6 +146,7 @@ _C.MODEL.CONVNEXTIR.IN_CHANNELS = 3
 # -----------------------------------------------------------------------------
 _C.TRAIN = CN()
 _C.TRAIN.DEVICE = "mps"
+_C.TRAIN.RESUME = ""
 _C.TRAIN.BATCH_SIZE = 32
 # Update parameters once in every `ACCUMULATE_GRADS` iterations.
 _C.TRAIN.ACCUMULATE_GRADS = 1

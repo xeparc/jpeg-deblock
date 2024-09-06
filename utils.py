@@ -87,20 +87,23 @@ class CombinedLoss:
 
 
 
-def load_checkpoint(state, config, logger):
-    logger.error(f"========= > Resuming from {config.MODEL.RESUME}")
-    checkpoint = torch.load(config.MODEL.RESUME, map_location='cpu', weights_only=True)
+def load_checkpoint(state, config, monitor):
+    monitor.log(logging.INFO, f"=== > Resuming from {config.TRAIN.RESUME}")
+    checkpoint = torch.load(config.TRAIN.RESUME, map_location='cpu')
     iter = checkpoint["iteration"]
-    for k, v in checkpoint.items():
-        if k in state and isinstance(state[k], torch.nn.Module):
+
+    for k in checkpoint.keys():
+        if k not in state:
+            continue
+        if hasattr(state[k], "load_state_dict"):
             state[k].load_state_dict(checkpoint[k])
-            logger.error(f"=== > loaded successfully \"{k}\" (iter {iter})")
-        elif k in state:
-            state[k] = checkpoint[k]
         else:
-            logger.error(f"=== > failed to load \"{k}\" (iter {iter})")
+            state[k] = checkpoint[k]
+        monitor.log(logging.INFO, f"=== > loaded successfully \"{k}\" (iter {iter})")
+
     config.defrost()
     config.TRAIN.START_ITERATION = checkpoint["iteration"] + 1
+    return config
 
 
 def save_checkpoint(state, config, monitor):

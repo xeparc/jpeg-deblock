@@ -8,11 +8,10 @@ import time
 
 import numpy as np
 import torch
-import torchvision
 from yacs.config import CfgNode
 import wandb
 
-from config import default_config, get_config
+from config import get_config
 from builders import *
 from monitoring import TrainingMonitor
 from models.perceptual import MobileNetV2
@@ -55,7 +54,7 @@ def train(
 
             # Run forward pass, make predictions
             tic = time.time()
-            preds = 100 * (0.5 + model(batch["lq_rgb"]))
+            preds = 100 * (0.5 + model(batch["lq_ycc"]))
             targets = batch["quality"]
 
             # Calculate loss
@@ -106,47 +105,66 @@ def train(
                     "optimizer": optimizer.state_dict(),
                     "lr_scheduler": lr_scheduler.state_dict(),
                     "iteration": current_iter,
-                    "psnr": -1
                 }
                 save_checkpoint(savestate, config, monitor)
 
 
-
-
 @torch.no_grad()
-def validate(config: CfgNode, model: SpectralModel,
-             dataloader: torch.utils.data.DataLoader, monitor):
-
-    monitor.log(logging.INFO, "validate()...")
+def validate(
+    config: CfgNode,
+    model: torch.nn.Module,
+    dataloader: torch.utils.data.DataLoader,
+    monitor: TrainingMonitor
+    ):
 
     tic = time.time()
     total_loss = []
     for batch in dataloader:
         targets = batch["quality"]
-        preds = 100 * (0.5 + model(batch["lq_rgb"]))
+        preds = 100 * (0.5 + model(batch["lq_ycc"]))
         loss = torch.nn.functional.mse_loss(preds, targets)
         total_loss.append(loss.item())
 
-    monitor.add_scalar({"validation/loss": np.mean(total_loss),
-                        "validation/confidence": np.std(total_loss)})
-
     t = int(time.time() - tic)
-    monitor.log(logging.INFO,
-                f"validate() took {datetime.timedelta(seconds=t)}")
-    monitor.step()
+    current_iter = monitor.get_step()
+    total_iters = config.TRAIN.NUM_ITERATIONS
+    loss_mean = np.mean(total_loss)
+    loss_std  = np.std(total_loss)
+
+    monitor.log(
+        logging.INFO,
+        f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
+        f"time: {t:.2f}\t"
+        f"loss: {loss_mean:.4f} ± {loss_std:.4f}\t"
+    )
+    monitor.add_scalar({"validation/loss": loss_mean,
+                        "validation/confidence": loss_std})
+    return
 
 
-def train_validate_loop(config, model, train_loader, val_loader, optimizer,
-                        lr_scheduler, monitor):
+def train_validate_loop(
+        config: CfgNode,
+        model: torch.nn.Module,
+        train_loader: torch.utils.data.DataLoader,
+        val_loader: torch.utils.data.DataLoader,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
+        monitor: TrainingMonitor):
 
     val_every =         config.VALIDATION.EVERY
     max_iters =         config.TRAIN.NUM_ITERATIONS
+
+    plots_dir = os.path.join(config.LOGGING.DIR, config.TAG, "plots")
+    monitor_path = os.path.join(config.LOGGING.DIR, config.TAG, "monitor.pickle")
 
     for i in range(0, max_iters, val_every):
         train(config, model, train_loader, optimizer, lr_scheduler,
               monitor, start_iter=i, max_iters=i+val_every)
         # Validate
         validate(config, model, val_loader, monitor)
+        # Plots
+        monitor.plot_scalars(plots_dir)
+        monitor.save_state(monitor_path)
         # Repeat...
 
 
@@ -178,6 +196,19 @@ def main(cfg):
     if cfg.TRAIN.CHECKPOINT_EVERY > 0:
         os.makedirs(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.MODEL.NAME),
                     exist_ok=True)
+
+    # Optionally load checkpoint
+    if cfg.TRAIN.RESUME:
+        state = {
+            "model": model,
+            "optimizer": optim,
+            "lr_scheduler": lr_scheduler,
+            "iteration": cfg.TRAIN.START_ITERATION,
+        }
+        cfg = load_checkpoint(state, cfg, monitor)
+        model = state["model"]
+        optim = state["optimizer"]
+        lr_scheduler = state["lr_scheduler"]
 
     # Jump to training loop
     train_validate_loop(

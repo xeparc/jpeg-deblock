@@ -129,6 +129,9 @@ class TrainingMonitor:
     def step(self):
         self._step += 1
 
+    def get_step(self):
+        return self._step
+
 
 class NullMonitor:
 
