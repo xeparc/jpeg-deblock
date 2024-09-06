@@ -183,6 +183,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
     def __init__(
             self,
             image_dirs: Union[str, collections.abc.Iterable],
+            region_size: int,
             patch_size: int,
             num_patches: int,
             min_quality: int,
@@ -213,6 +214,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         assert 1 <= target_quality <= 100
         assert 1 <= patch_size
 
+        self.region_size = region_size
         self.patch_size = patch_size
         self.subsample = subsample
         self.min_quality = min_quality
@@ -241,7 +243,15 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
                 for fname in filter(is_image, filenames):
                     self.image_paths.append(os.path.join(root, fname))
 
-        self.crop = torchvision.transforms.RandomCrop(size=self.patch_size)
+        # Initialize crop transform. Crop patches from central region optionally
+        if self.region_size > self.patch_size:
+            self.crop = torchvision.transforms.Compose([
+                torchvision.transforms.CenterCrop(self.region_size),
+                torchvision.transforms.RandomCrop(self.patch_size)
+            ])
+        else:
+            self.crop = torchvision.transforms.RandomCrop(self.patch_size)
+        # Initialize random generator for `quality` sampling
         self.rng = np.random.default_rng(self.seed)
 
     def __len__(self) -> int:
@@ -252,7 +262,6 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         impath = self.image_paths[index]
         # Read image
         image = Image.open(impath)
-
         # Sample array of JPEG qualities
         qualities = self.rng.integers(
             self.min_quality, self.max_quality, size=self.num_patches)
@@ -271,7 +280,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             patchT = JPEGTransforms(np.array(patch))
             # Save metadata
             result["filepath"].append(impath)
-            result["quality"].append(quality)
+            result["quality"].append(torch.tensor(quality, dtype=torch.float32).view(1))
 
             # High quality RGB
             if self.use_hq_rgb:
@@ -279,9 +288,11 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             # High quality YCbCr (downsampled + upsampled)
             if self.use_hq_ycc:
                 y, cb, cr = patchT.get_ycc_planes(self.subsample)
+                ycc = patchT.get_upsampled_ycc_planes(self.subsample)
                 result["hq_y"].append(transform_ycc(y))
                 result["hq_cb"].append(transform_ycc(cb))
                 result["hq_cr"].append(transform_ycc(cr))
+                result["hq_ycc"].append(transform_ycc(ycc))
             # High quality DCT coefficients
             if self.use_hq_dct:
                 dct = patchT.get_dct_planes(self.subsample)
@@ -306,9 +317,11 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             # Low quality YCbCr (downsampled + upsampled)
             if self.use_lq_ycc:
                 y, cb, cr = quantizedT.get_ycc_planes(self.subsample)
+                ycc = quantizedT.get_upsampled_ycc_planes(self.subsample)
                 result["lq_y"].append(transform_ycc(y))
                 result["lq_cb"].append(transform_ycc(cb))
                 result["lq_cr"].append(transform_ycc(cr))
+                result["lq_ycc"].append(transform_ycc(ycc))
             # Low quality DCT coefficients
             if self.use_lq_dct:
                 dct = quantizedT.get_dct_planes(self.subsample)

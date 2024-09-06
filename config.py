@@ -9,6 +9,7 @@ _C.BASE = ['']
 
 _C.SEED = 7
 _C.TAG = "default"
+_C.COMMENT = ""
 
 # -----------------------------------------------------------------------------
 # Datatest config
@@ -19,32 +20,54 @@ _C.DATA.LOCATIONS = CN()
 _C.DATA.LOCATIONS.TRAIN = ["data/DIV2K/DIV2K_train_HR/", "data/Flickr2K/"]
 _C.DATA.LOCATIONS.VAL = ["data/DIV2K/DIV2K_valid_HR/"]
 _C.DATA.LOCATIONS.TEST = ["data/10/", "data/20/", "data/30/", "data/40/"]
+# Size of the central square region from which patches are sampled.
+# If negative, the CenterCrop transform is ignored.
+_C.DATA.REGION_SIZE = 800
+# Size of extracted patch
 _C.DATA.PATCH_SIZE = 64
+# Number of extracted patches from single image
 _C.DATA.NUM_PATCHES = 16
+# Chrominance subsampling mode
 _C.DATA.SUBSAMPLE = 420
+# Minimum sampled JPEG quality
 _C.DATA.MIN_QUALITY = 10
+# Maximum sampled JPEG quality
 _C.DATA.MAX_QUALITY = 85
+# Target JPEG quality
 _C.DATA.TARGET_QUALITY = 100
+# Unused
 _C.DATA.CACHED = False
+# Include RGB channels from LQ image in datapoint?
 _C.DATA.USE_LQ_RGB = False
+# Include YCbCr planes from LQ image in datapoint?
 _C.DATA.USE_LQ_YCC = False
+# Include DCT coefficients from LQ image in datapoint?
 _C.DATA.USE_LQ_DCT = True
-# Include target image's RGB channels in datapoints ?
+# Include RGB channels from HQ image in datapoint?
 _C.DATA.USE_HQ_RGB = True
-# Include target image's YCbCr planes in datapoints ?
+# Include YCbCr planes from HQ image in datapoint?
 _C.DATA.USE_HQ_YCC = True
-# Include target image's DCT in datapoints ?
+# Include DCT coefficients from HQ image in datapoint?
 _C.DATA.USE_HQ_DCT = False
-# Include JPEG quantization tables in datapoints ?
+# Include JPEG quantization tables in datapoint?
 _C.DATA.USE_QTABLES = True
+# Normalize RGB ?
 _C.DATA.NORMALIZE_RGB = False
+# Normalize YCbCr ?
 _C.DATA.NORMALIZE_YCC = False
+# Normalize DCT coefficients ?
 _C.DATA.NORMALIZE_DCT = True
+# If True, map [1, 255] quantization table range to [1, 0].
+# If False, map [1, 255] quantization table range to [0, 1].
 _C.DATA.INVERT_QT = False
 _C.DATA.DCT_STATS_FILEPATH = "data/DIV2K+Flickr2K-dct-stats.json"
+# Unused
 _C.DATA.PIN_MEMORY = False
+# Unused
 _C.DATA.PIN_MEMORY_DEVICE = "mps"
+# Shuffle data in dataloader
 _C.DATA.SHUFFLE = True
+# Unused
 _C.DATA.NUM_WORKERS = 0
 
 

@@ -206,6 +206,7 @@ def build_dataloader(config, kind: str):
 
     dataset = DatasetQuantizedJPEG(
         image_dirs=         image_dirs,
+        region_size=        config.DATA.REGION_SIZE,
         patch_size=         config.DATA.PATCH_SIZE,
         num_patches=        num_patches,
         min_quality=        config.DATA.MIN_QUALITY,
