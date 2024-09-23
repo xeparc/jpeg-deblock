@@ -111,6 +111,7 @@ class TrainingMonitor:
             self.scalars_steps = state["scalars_steps"]
 
     def plot_scalars(self, savedir):
+        os.makedirs(savedir, exist_ok=True)
         for key in self.scalars:
             parts, name = os.path.split(key)
             if parts:

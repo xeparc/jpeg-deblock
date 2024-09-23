@@ -77,6 +77,9 @@ _C.DATA.NUM_WORKERS = 0
 # -----------------------------------------------------------------------------
 _C.MODEL = CN()
 _C.MODEL.NAME = ""
+_C.MODEL.CLASS = ""
+_C.MODEL.INPUTS = "lq_rgb"
+_C.MODEL.TARGETS = "hq_rgb"
 # _C.MODEL.RGB_OUTPUT = True
 # If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
 _C.MODEL.SHARED_LUMA_CHROMA = True
@@ -140,6 +143,16 @@ _C.MODEL.CONVNEXTIR = CN()
 _C.MODEL.CONVNEXTIR.DEPTHS = [1,2,4,1]
 _C.MODEL.CONVNEXTIR.DIMS = [64, 128, 128, 32]
 _C.MODEL.CONVNEXTIR.IN_CHANNELS = 3
+
+# MobileNetIR Model
+_C.MODEL.MOBILENETIR = CN()
+_C.MODEL.MOBILENETIR.IN_CHANNELS = 3
+_C.MODEL.MOBILENETIR.OUT_CHANNELS = 3
+
+# RRDBNet Model
+_C.MODEL.RRDBNET = CN()
+_C.MODEL.RRDBNET.LUMA_BLOCKS = 5
+_C.MODEL.RRDBNET.CHROMA_BLOCKS = 3
 
 # -----------------------------------------------------------------------------
 # Training settings
@@ -219,7 +232,7 @@ _C.LOGGING = CN()
 _C.LOGGING.LOG_EVERY = 100
 _C.LOGGING.DIR = "logs/"
 _C.LOGGING.WANDB = True
-
+_C.LOGGING.PLOTS = True
 
 def default_config():
     return _C.clone()

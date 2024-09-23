@@ -30,6 +30,7 @@ from models.models import (
     ConvNeXtBlock,
     GradeModel
 )
+from models import *
 from utils import CombinedLoss
 
 
@@ -179,6 +180,27 @@ def build_chroma_net(config):
 
     return net
 
+
+def build_model(config):
+
+    if config.MODEL.CLASS == "MobileNetIR":
+        model = MobileNetIR(
+            in_channels=        config.MODEL.MOBILENETIR.IN_CHANNELS,
+            out_channels=       config.MODEL.MOBILENETIR.OUT_CHANNELS,
+        )
+    elif config.MODEL.CLASS == "RRDBNet":
+        model = RRDBNet(
+            luma_blocks=        config.MODEL.RRDBNET.LUMA_BLOCKS,
+            chroma_blocks=      config.MODEL.RRDBNET.CHROMA_BLOCKS
+        )
+    elif config.MODEL.CLASS == "PrismLumaS4":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        model = PrismLumaS4(idct)
+    else:
+        raise NotImplementedError
+
+    return model
 
 def build_dataloader(config, kind: str):
     assert kind in ("train", "val", "test")

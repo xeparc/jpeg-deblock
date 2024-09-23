@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import yacs
 
+from models import *
+
 IMAGE_EXTENSIONS = "jpg jpeg bmp png tif tiff".split()
 _VALID_TYPES = {tuple, list, str, int, float, bool}
 
@@ -131,14 +133,14 @@ def charbonnier_loss(input, target, reduction="mean", eps=1e-3):
         raise ValueError
 
 
-def yacs_to_dict(cfg_node, key_list=[]):
+def yacs_to_dict(cfg_node):
     """ Convert a config node to dictionary """
     if not isinstance(cfg_node, yacs.config.CfgNode):
         return cfg_node
     else:
         cfg_dict = dict(cfg_node)
         for k, v in cfg_dict.items():
-            cfg_dict[k] = yacs_to_dict(v, key_list + [k])
+            cfg_dict[k] = yacs_to_dict(v)
         return cfg_dict
 
 
@@ -158,6 +160,22 @@ def clip_gradients(model, max_norm: float, how: str):
                                                error_if_nonfinite=True)
             result[name] = g.item()
     return result
+
+
+def collect_inputs(model, batch):
+    if isinstance(model, RRDBNet):
+        return dict(x=batch["lq_ycc"])
+    elif isinstance(model, PrismLumaS4):
+        return dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
+    else:
+        raise NotImplementedError
+
+
+def collect_target(model, batch):
+    if isinstance(model, RRDBNet):
+        return batch["hq_ycc"]
+    elif isinstance(model, PrismLumaS4):
+        return batch["hq_y"]
 
 
 def get_alloc_memory(config):
