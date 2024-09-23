@@ -196,27 +196,35 @@ def build_model(config):
     elif config.MODEL.CLASS == "PrismLumaS4":
         dct_stats = get_dct_stats(config)
         idct = InverseDCT(**dct_stats)
-        model = PrismLumaS4(idct)
+        kwargs = dict(config.MODEL.KWARGS)
+        model = PrismLumaS4(idct, **kwargs)
     else:
         raise NotImplementedError
 
     return model
 
+
 def build_dataloader(config, kind: str):
     assert kind in ("train", "val", "test")
 
     if kind == "train":
-        image_dirs = config.DATA.LOCATIONS.TRAIN
-        num_patches = config.DATA.NUM_PATCHES
-        batch_size = config.TRAIN.BATCH_SIZE // num_patches
+        image_dirs =    config.DATA.LOCATIONS.TRAIN
+        num_patches =   config.DATA.NUM_PATCHES
+        batch_size =    config.TRAIN.BATCH_SIZE // num_patches
+        region_size =   config.DATA.REGION_SIZE
+        patch_size =    config.DATA.PATCH_SIZE
     elif kind == "val":
-        image_dirs = config.DATA.LOCATIONS.VAL
-        num_patches = 1
-        batch_size = config.VALIDATION.BATCH_SIZE
+        image_dirs =    config.DATA.LOCATIONS.VAL
+        num_patches =   1
+        batch_size =    config.VALIDATION.BATCH_SIZE
+        region_size =   config.DATA.REGION_SIZE
+        patch_size =    config.DATA.PATCH_SIZE
     elif kind == "test":
-        image_dirs = config.DATA.LOCATIONS.TEST
-        num_patches = 1
-        batch_size = config.TEST.BATCH_SIZE
+        image_dirs =    config.DATA.LOCATIONS.TEST
+        num_patches =   1
+        batch_size =    config.TEST.BATCH_SIZE
+        region_size =   400
+        patch_size =    400
 
     if config.DATA.NORMALIZE_DCT:
         coeffs = get_dct_stats(config)
@@ -228,8 +236,8 @@ def build_dataloader(config, kind: str):
 
     dataset = DatasetQuantizedJPEG(
         image_dirs=         image_dirs,
-        region_size=        config.DATA.REGION_SIZE,
-        patch_size=         config.DATA.PATCH_SIZE,
+        region_size=        region_size,
+        patch_size=         patch_size,
         num_patches=        num_patches,
         min_quality=        config.DATA.MIN_QUALITY,
         max_quality=        config.DATA.MAX_QUALITY,

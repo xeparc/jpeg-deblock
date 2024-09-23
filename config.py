@@ -83,7 +83,7 @@ _C.MODEL.TARGETS = "hq_rgb"
 # _C.MODEL.RGB_OUTPUT = True
 # If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
 _C.MODEL.SHARED_LUMA_CHROMA = True
-
+_C.MODEL.KWARGS = []
 
 # `BlockNet` embeds the DCT coefficients of each 8x8 block into embedding vector
 # Interaction type between quantization table and DCT coefficients
@@ -205,7 +205,7 @@ _C.VALIDATION.EVERY = 500
 # Test config
 # -----------------------------------------------------------------------------
 _C.TEST = CN()
-_C.TEST.BATCH_SIZE = 64
+_C.TEST.BATCH_SIZE = 1
 _C.TEST.SAMPLES_DIR = "data/samples/"
 
 

@@ -73,15 +73,18 @@ class PrismBackbone(nn.Module):
 
 class PrismLumaS4(nn.Module):
 
-    def __init__(self, idct):
+    def __init__(self, idct, residual=False, base_channels=16,
+                 blocks_per_stage=1, channel_multiplier=2):
         super().__init__()
-        self.luma = PrismBackbone(1, 64, base_channels=16, use_3d_conv=False)
+        self.residual = residual
+        self.luma = PrismBackbone(1, 64, base_channels, blocks_per_stage,
+                                  channel_multiplier, False)
         self.idct = idct
 
     def forward(self, y, dct_y):
         # Extract Y plane
         r = self.luma(y)
-        dct = r + dct_y
+        dct = r + dct_y if self.residual else r
         out = self.idct(dct, chroma=False)
         return out
 

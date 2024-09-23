@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import torch
+import torchvision
 from yacs.config import CfgNode
 import wandb
 
@@ -120,7 +121,7 @@ def validate(
     model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
     monitor: TrainingMonitor
-    ):
+):
 
     tic = time.time()
     total_loss = []
@@ -151,17 +152,56 @@ def validate(
     return
 
 
-def train_validate_loop(
-        config: CfgNode,
-        model: torch.nn.Module,
-        train_loader: torch.utils.data.DataLoader,
-        val_loader: torch.utils.data.DataLoader,
-        optimizer: torch.optim.Optimizer,
-        lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
-        monitor: TrainingMonitor):
+@torch.no_grad()
+def test_samples(
+        config:         CfgNode,
+        model:          torch.nn.Module,
+        dataloader:     torch.utils.data.DataLoader,
+        monitor:        TrainingMonitor
+):
 
-    val_every =         config.VALIDATION.EVERY
-    max_iters =         config.TRAIN.NUM_ITERATIONS
+    current_iter = monitor.get_step()
+    total_iters = config.TRAIN.NUM_ITERATIONS
+    savedir = os.path.join(config.LOGGING.DIR, config.TAG, "testsamples", str(current_iter))
+    os.makedirs(savedir)
+
+    to_uint8 = torchvision.transforms.ConvertImageDtype(torch.uint8)
+
+    tic = time.time()
+    for batch in dataloader:
+        inputs = collect_inputs(model, batch)
+        preds = model(**inputs)
+        filepaths = batch["filepath"]
+        for path, pred in zip(filepaths, preds):
+            name = os.path.basename(path)
+            # strip extension
+            name = '.'.join(name.split('.')[:-1])
+            savepath = os.path.join(savedir, name + ".png")
+            img = to_uint8(pred.cpu())
+            torchvision.io.write_png(img, savepath)
+    t = time.time() - tic
+
+    monitor.log(
+        logging.INFO,
+        f"Test samples: [{current_iter:>6}/{total_iters:>6}]\t"
+        f"time: {t:.2f}\t"
+    )
+    return
+
+
+def train_validate_loop(
+        config:         CfgNode,
+        model:          torch.nn.Module,
+        train_loader:   torch.utils.data.DataLoader,
+        val_loader:     torch.utils.data.DataLoader,
+        test_loader:    torch.utils.data.DataLoader,
+        optimizer:      torch.optim.Optimizer,
+        lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
+        monitor:        TrainingMonitor
+):
+
+    val_every = config.VALIDATION.EVERY
+    max_iters = config.TRAIN.NUM_ITERATIONS
 
     plots_dir = os.path.join(config.LOGGING.DIR, config.TAG, "plots")
     monitor_path = os.path.join(config.LOGGING.DIR, config.TAG, "monitor.pickle")
@@ -171,6 +211,8 @@ def train_validate_loop(
               monitor, start_iter=i, max_iters=i+val_every)
         # Validate
         validate(config, model, val_loader, monitor)
+        # Test samples
+        test_samples(config, model, test_loader, monitor)
         # Plots
         if config.LOGGING.PLOTS:
             monitor.plot_scalars(plots_dir)
@@ -190,6 +232,7 @@ def main(cfg):
     # Init dataloaders
     train_loader    = build_dataloader(cfg, "train")
     val_loader      = build_dataloader(cfg, "val")
+    test_loader     = build_dataloader(cfg, "test")
 
     # Init models
     model           = build_model(cfg).to(device)
@@ -226,6 +269,7 @@ def main(cfg):
         model=              model,
         train_loader=       train_loader,
         val_loader=         val_loader,
+        test_loader=        test_loader,
         optimizer=          optim,
         lr_scheduler=       lr_scheduler,
         monitor=            monitor
