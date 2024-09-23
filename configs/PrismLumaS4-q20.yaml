@@ -1,0 +1,64 @@
+
+SEED: 7
+
+DATA:
+  PIN_MEMORY: False
+  NAME: "DIV2K+Flickr2K"
+  LOCATIONS:
+    TRAIN: ["data/DIV2K/DIV2K_train_HR", "data/Flickr2K/"]
+    VAL: ["data/DIV2K/DIV2K_valid_HR/"]
+    TEST: ["data/Live1-Classic5/live1/refimgs/"]
+  PATCH_SIZE: 128
+  REGION_SIZE: -1
+  NUM_PATCHES: 16
+  SUBSAMPLE: 444
+  MIN_QUALITY: 20
+  MAX_QUALITY: 21
+  TARGET_QUALITY: 100
+  CACHED: False
+  USE_LQ_RGB: False
+  USE_LQ_YCC: True
+  USE_LQ_DCT: True
+  USE_HQ_RGB: False
+  USE_HQ_YCC: True
+  USE_HQ_DCT: False
+  USE_QTABLES: False
+  NORMALIZE_RGB: False
+  NORMALIZE_YCC: False
+  NORMALIZE_DCT: True
+  INVERT_QT: False
+  DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
+  PIN_MEMORY: False
+  PIN_MEMORY_DEVICE: ''
+  SHUFFLE: True
+  NUM_WORKERS: 0
+MODEL:
+  NAME: PrismLuma
+  CLASS: PrismLumaS4
+  KWARGS: [[residual, False], [base_channels, 32]]
+
+TRAIN:
+  DEVICE: "mps"
+  BATCH_SIZE: 16
+  NUM_ITERATIONS: 100_000
+  WARMUP_ITERATIONS: 1000
+  CLIP_GRAD: 10.0
+  CLIP_GRAD_METHOD: "total"
+  BASE_LR: 2.0e-4
+  WARMUP_LR: 1.0e-5
+  LR_SCHEDULER:
+    NAME: cosine
+    KWARGS: [[T_0, 99_000], [eta_min, 1.0e-6], [T_mult, 2]]
+    WARMUP_PREFIX: True
+  CHECKPOINT_EVERY: 500
+  CHECKPOINT_DIR: /Volumes/SiliconPower/jpeg-deblock/checkpoints/
+VALIDATION:
+  BATCH_SIZE: 16
+  EVERY: 50
+LOGGING:
+  DIR: /Volumes/SiliconPower/jpeg-deblock/logs
+  LOG_EVERY: 10
+  WANDB: False
+  PLOTS: False
+
+TAG: PrismLumaS4-DIV2K+Flickr2K-quality=20
