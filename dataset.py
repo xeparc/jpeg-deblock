@@ -244,7 +244,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
                     self.image_paths.append(os.path.join(root, fname))
 
         # Initialize crop transform. Crop patches from central region optionally
-        if self.region_size > self.patch_size:
+        if self.region_size >= self.patch_size:
             self.crop = torchvision.transforms.Compose([
                 torchvision.transforms.CenterCrop(self.region_size),
                 torchvision.transforms.RandomCrop(self.patch_size)
@@ -462,7 +462,7 @@ class DatasetQualityAssesment(torch.utils.data.Dataset):
         res = {}
         for k, collection in temp.items():
             if isinstance(collection[0], torch.Tensor):
-                res[k] = torch.stack(collection, dim=0).to(device=device)
+                res[k] = torch.stack(collection, dim=0).to(device=device).pin_memory(device=device)
             else:
                 res[k] = collection
         return res
