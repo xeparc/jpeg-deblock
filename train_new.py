@@ -177,7 +177,7 @@ def test_samples(
             # strip extension
             name = '.'.join(name.split('.')[:-1])
             savepath = os.path.join(savedir, name + ".png")
-            img = to_uint8(pred.cpu())
+            img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
             torchvision.io.write_png(img, savepath)
     t = time.time() - tic
 
