@@ -253,3 +253,32 @@ class InverseDCT(torch.nn.Module):
 
         return (res.view(B, 1, 8*H, 8*W) + 128) / 255.0
 
+
+class FiLM(nn.Module):
+
+    def __init__(self, features_dim: int, condition_dim: int):
+        # TODO
+        # Allow condition_dim to be `tuple`. Easy to implement
+        super().__init__()
+
+        self.f_gamma = nn.Sequential(
+            nn.Linear(condition_dim, features_dim), nn.Sigmoid)
+        self.f_beta  = nn.Sequential(
+            nn.Linear(condition_dim, features_dim), nn.Tanh)
+
+        nn.init.xavier_uniform_(self.f_gamma[0].weight)
+        nn.init.xavier_uniform_(self.f_beta[0].weight, gain=0.1)
+
+    def forward(self, features: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+            features:
+                Feature maps with shape (N, C, H, W)
+            condition:
+                Vector with shape (N, K)
+        """
+        gamma = self.f_gamma(condition).view(1, -1, 1, 1)
+        beta  = self.f_beta(condition).view(1, -1, 1, 1)
+        return gamma * features + beta
+
