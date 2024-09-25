@@ -188,23 +188,45 @@ def build_model(config):
             in_channels=        config.MODEL.MOBILENETIR.IN_CHANNELS,
             out_channels=       config.MODEL.MOBILENETIR.OUT_CHANNELS,
         )
+
     elif config.MODEL.CLASS == "RRDBNet":
         model = RRDBNet(
             luma_blocks=        config.MODEL.RRDBNET.LUMA_BLOCKS,
             chroma_blocks=      config.MODEL.RRDBNET.CHROMA_BLOCKS
         )
+
     elif config.MODEL.CLASS == "PrismLumaS4":
         dct_stats = get_dct_stats(config)
         idct = InverseDCT(**dct_stats)
         kwargs = dict(config.MODEL.KWARGS)
         model = PrismLumaS4(idct, **kwargs)
+
+    elif config.MODEL.CLASS == "FlareLuma":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        kwargs = dict(config.MODEL.FLARE.LUMA.KWARGS)
+        model = FlareLuma(idct, **kwargs)
+
+    elif config.MODEL.CLASS == "FlareNet":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        # Build Luma submodel
+        luma_kwargs = dict(config.MODEL.FLARE.LUMA.KWARGS)
+        luma = FlareLuma(idct, **luma_kwargs)
+        # Build Chroma submodel
+        chroma_kwargs = dict(config.MODEL.FLARE.CHROMA.KWARGS)
+        chroma = FlareChroma(idct, **chroma_kwargs)
+        # Build Flare model
+        flare_kwargs = dict(config.FLARE.KWARGS)
+        model = FlareNet(luma, chroma, **flare_kwargs)
+
     else:
         raise NotImplementedError
 
     return model
 
 
-def build_dataloader(config, kind: str):
+def build_dataloader(config, kind: str, quality: int = 0):
     assert kind in ("train", "val", "test")
 
     if kind == "train":
@@ -213,18 +235,30 @@ def build_dataloader(config, kind: str):
         batch_size =    config.TRAIN.BATCH_SIZE // num_patches
         region_size =   config.DATA.REGION_SIZE
         patch_size =    config.DATA.PATCH_SIZE
+        cached =        config.DATA.CACHED
     elif kind == "val":
         image_dirs =    config.DATA.LOCATIONS.VAL
         num_patches =   1
         batch_size =    config.VALIDATION.BATCH_SIZE
-        region_size =   config.DATA.REGION_SIZE
+        region_size =   config.DATA.PATCH_SIZE
         patch_size =    config.DATA.PATCH_SIZE
+        cached =        False
     elif kind == "test":
         image_dirs =    config.DATA.LOCATIONS.TEST
         num_patches =   1
         batch_size =    config.TEST.BATCH_SIZE
-        region_size =   400
-        patch_size =    400
+        region_size =   config.TEST.REGION_SIZE
+        patch_size =    config.TEST.REGION_SIZE
+        cached =        False
+
+    # Optionally, override min/max quaility in config.DATA.
+    # This is used to evaluate models on test samples.
+    if quality > 0:
+        min_quality = quality
+        max_quality = quality + 1
+    else:
+        min_quality = config.DATA.MIN_QUALITY
+        max_quality = config.DATA.MAX_QUALITY
 
     if config.DATA.NORMALIZE_DCT:
         coeffs = get_dct_stats(config)
@@ -239,8 +273,8 @@ def build_dataloader(config, kind: str):
         region_size=        region_size,
         patch_size=         patch_size,
         num_patches=        num_patches,
-        min_quality=        config.DATA.MIN_QUALITY,
-        max_quality=        config.DATA.MAX_QUALITY,
+        min_quality=        min_quality,
+        max_quality=        max_quality,
         target_quality=     config.DATA.TARGET_QUALITY,
         subsample=          config.DATA.SUBSAMPLE,
         transform_dct=      transform_dct,
@@ -252,7 +286,9 @@ def build_dataloader(config, kind: str):
         use_hq_ycc=         config.DATA.USE_HQ_YCC,
         use_hq_dct=         config.DATA.USE_HQ_DCT,
         use_qt=             config.DATA.USE_QTABLES,
-        seed=               config.SEED
+        seed=               config.SEED,
+        cached=             cached,
+        cache_memory=       config.DATA.CACHE_MEMORY
     )
 
     device = torch.device(config.TRAIN.DEVICE)

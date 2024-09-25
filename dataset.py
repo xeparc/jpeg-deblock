@@ -10,10 +10,11 @@ import torch
 import torch.nn as nn
 import torchvision
 from PIL import Image
+import torchvision.transforms.functional
 from turbojpeg import TurboJPEG
 
 from utils import is_image
-from jpegutils import JPEGTransforms
+from jpegutils import JPEGTransforms, jpeg_quality_scaling
 
 IMAGES_PATH = "data/BSDS500/BSDS500/data/images/"
 OUTPUT_PATH = "data/"
@@ -203,7 +204,8 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             use_qt: bool,
             seed = None,
             device = "cpu",
-            cached: bool = False
+            cached: bool = False,
+            cache_memory: float = 16.0
     ):
 
         if isinstance(image_dirs, str):
@@ -243,6 +245,21 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
                 for fname in filter(is_image, filenames):
                     self.image_paths.append(os.path.join(root, fname))
 
+        # Load images to memory if `cached` == True
+        self.imgcache = {}
+        if self.cached:
+            max_cache_size = cache_memory * (2 ** 30)
+            cur_cache_size = 0
+            for path in self.image_paths:
+                img = Image.open(path)
+                img = torchvision.transforms.functional.pil_to_tensor(img)
+                sz = img.numel()
+                if cur_cache_size + sz < max_cache_size:
+                    self.imgcache[path] = img
+                    cur_cache_size += sz
+                else:
+                    break
+
         # Initialize crop transform. Crop patches from central region optionally
         if self.region_size >= self.patch_size:
             self.crop = torchvision.transforms.Compose([
@@ -251,8 +268,19 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             ])
         else:
             self.crop = torchvision.transforms.RandomCrop(self.patch_size)
-        # Initialize random generator for `quality` sampling
-        self.rng = np.random.default_rng(self.seed)
+
+        # Instead of sampling from uniform distribution
+        # U[`min_quality`, `max_quality`], it makes more sense to sample from
+        # a distribution that has heavier tail on lower qualities.
+        # JPEG quality scaling is nonlinear for q < 50, and the change in
+        # image degradation is way more severe for lower qualities.
+        # That's why we'll sample with predefined probability for each
+        # `quality` in [1, 100].
+        # The sampling probability `p` will be proportional to the
+        # quality scaling a.k.a quantization level.
+        self.quality_a  = np.arange(min_quality, max_quality, dtype=np.float32)
+        self.quality_p  = np.array([jpeg_quality_scaling(x) for x in self.quality_a], dtype=np.float32)
+        self.quality_p /= np.sum(self.quality_p)
 
     def __len__(self) -> int:
         return len(self.image_paths)
@@ -260,11 +288,15 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
     def __getitem__(self, index: int) -> dict:
         # Get filepath of image
         impath = self.image_paths[index]
+
         # Read image
-        image = Image.open(impath)
+        if self.cached and impath in self.imgcache:
+            image = self.imgcache[impath]
+        else:
+            image = torchvision.transforms.functional.pil_to_tensor(Image.open(impath))
+
         # Sample array of JPEG qualities
-        qualities = self.rng.integers(
-            self.min_quality, self.max_quality, size=self.num_patches)
+        qualities = np.random.choice(self.quality_a, self.num_patches, p=self.quality_p)
 
         transform_rgb = self.transform_rgb
         transform_ycc = self.transform_ycc
@@ -277,7 +309,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             quality = quality
             # Crop patch
             patch = self.crop(image)
-            patchT = JPEGTransforms(np.array(patch))
+            patchT = JPEGTransforms(patch.permute(1,2,0).numpy())
             # Save metadata
             result["filepath"].append(impath)
             result["quality"].append(torch.tensor(quality, dtype=torch.float32).view(1))

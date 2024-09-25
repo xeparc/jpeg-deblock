@@ -146,6 +146,9 @@ def yacs_to_dict(cfg_node):
 
 def clip_gradients(model, max_norm: float, how: str):
 
+    if max_norm <= 0.0:
+        return {}
+
     model_name = type(model).__name__
     result = {}
 
@@ -167,6 +170,19 @@ def collect_inputs(model, batch):
         return dict(x=batch["lq_ycc"])
     elif isinstance(model, PrismLumaS4):
         return dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
+    elif isinstance(model, FlareLuma):
+        return dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"], qt=batch["qt_y"])
+    elif isinstance(model, FlareNet):
+        return dict(
+            y=      batch["lq_y"],
+            cb=     batch["lq_cb"],
+            cr=     batch["lq_cr"],
+            dct_y=  batch["lq_dct_y"],
+            dct_cb= batch["lq_dct_cb"],
+            dct_cr= batch["lq_dct_cr"],
+            qt_y=   batch["qt_y"],
+            qt_c=   batch["qt_c"]
+        )
     else:
         raise NotImplementedError
 
@@ -176,7 +192,12 @@ def collect_target(model, batch):
         return batch["hq_ycc"]
     elif isinstance(model, PrismLumaS4):
         return batch["hq_y"]
-
+    elif isinstance(model, FlareLuma):
+        return batch["hq_y"]
+    elif isinstance(model, FlareNet):
+        return batch["hq_rgb"] if model.rgb_output else batch["hq_ycc"]
+    else:
+        raise NotImplementedError
 
 def get_alloc_memory(config):
     if config.TRAIN.DEVICE == "cuda":

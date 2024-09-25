@@ -15,10 +15,14 @@ _C.COMMENT = ""
 # Datatest config
 # -----------------------------------------------------------------------------
 _C.DATA = CN()
+# Dataset name
 _C.DATA.NAME = "DIV2K"
 _C.DATA.LOCATIONS = CN()
+# List of dirs with train images
 _C.DATA.LOCATIONS.TRAIN = ["data/DIV2K/DIV2K_train_HR/", "data/Flickr2K/"]
+# List of dirs with validation images
 _C.DATA.LOCATIONS.VAL = ["data/DIV2K/DIV2K_valid_HR/"]
+# List of dirs with test images
 _C.DATA.LOCATIONS.TEST = ["data/10/", "data/20/", "data/30/", "data/40/"]
 # Size of the central square region from which patches are sampled.
 # If negative, the CenterCrop transform is ignored.
@@ -35,8 +39,10 @@ _C.DATA.MIN_QUALITY = 10
 _C.DATA.MAX_QUALITY = 85
 # Target JPEG quality
 _C.DATA.TARGET_QUALITY = 100
-# Unused
+# If True, images are loaded in memory for faster access
 _C.DATA.CACHED = False
+# Maximum amount of RAM dedicated to cache (in GB)
+_C.DATA.CACHE_MEMORY = 16
 # Include RGB channels from LQ image in datapoint?
 _C.DATA.USE_LQ_RGB = False
 # Include YCbCr planes from LQ image in datapoint?
@@ -154,6 +160,14 @@ _C.MODEL.RRDBNET = CN()
 _C.MODEL.RRDBNET.LUMA_BLOCKS = 5
 _C.MODEL.RRDBNET.CHROMA_BLOCKS = 3
 
+# Flare Luma / Chroma Models
+_C.MODEL.FLARE = CN()
+_C.MODEL.FLARE.LUMA = CN()
+_C.MODEL.FLARE.CHROMA = CN()
+_C.MODEL.FLARE.KWARGS = []
+_C.MODEL.FLARE.LUMA.KWARGS = []
+_C.MODEL.FLARE.CHROMA.KWARGS = []
+
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------
@@ -199,6 +213,7 @@ _C.TRAIN.LR_SCHEDULER.WARMUP_PREFIX = True
 _C.VALIDATION = CN()
 _C.VALIDATION.BATCH_SIZE = 64
 _C.VALIDATION.EVERY = 500
+_C.VALIDATION.QUALITIES = [10, 20, 40, 60, 80]
 
 
 # -----------------------------------------------------------------------------
@@ -206,8 +221,8 @@ _C.VALIDATION.EVERY = 500
 # -----------------------------------------------------------------------------
 _C.TEST = CN()
 _C.TEST.BATCH_SIZE = 1
-_C.TEST.SAMPLES_DIR = "data/samples/"
-
+_C.TEST.QUALITIES = [10, 20, 40, 60, 80]
+_C.TEST.REGION_SIZE = 512
 
 
 # -----------------------------------------------------------------------------

@@ -82,7 +82,7 @@ class TrainingMonitor:
         for name, new_param in new.items():
             if name not in old:
                 continue
-            diff = new_param.detach().cpu() - old[name].detach().cpu()
+            diff = new_param.detach() - old[name].detach()
             u = diff.mean().item()
             s = diff.std().item()
             n  = torch.linalg.norm(diff).item() / (torch.linalg.norm(new_param).item() + 1e-6)

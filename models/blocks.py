@@ -262,9 +262,9 @@ class FiLM(nn.Module):
         super().__init__()
 
         self.f_gamma = nn.Sequential(
-            nn.Linear(condition_dim, features_dim), nn.Sigmoid)
+            nn.Linear(condition_dim, features_dim, bias=False))
         self.f_beta  = nn.Sequential(
-            nn.Linear(condition_dim, features_dim), nn.Tanh)
+            nn.Linear(condition_dim, features_dim, bias=False))
 
         nn.init.xavier_uniform_(self.f_gamma[0].weight)
         nn.init.xavier_uniform_(self.f_beta[0].weight, gain=0.1)
@@ -278,7 +278,8 @@ class FiLM(nn.Module):
             condition:
                 Vector with shape (N, K)
         """
-        gamma = self.f_gamma(condition).view(1, -1, 1, 1)
-        beta  = self.f_beta(condition).view(1, -1, 1, 1)
+        N = condition.shape[0]
+        gamma = self.f_gamma(condition).view(N, -1, 1, 1)
+        beta  = self.f_beta(condition).view(N, -1, 1, 1)
         return gamma * features + beta
 
