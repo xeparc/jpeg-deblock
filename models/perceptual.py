@@ -1,4 +1,7 @@
+from typing import *
+
 import torch
+import torch.nn as nn
 import torchvision
 
 
@@ -43,15 +46,59 @@ class PixelwiseFeatures(torch.nn.Module):
         return x
 
 
-class MobileNetV2(torch.nn.Module):
+class PerceptualLoss(nn.Module):
 
-    def __init__(self):
+    def __init__(self,
+                 layers: nn.Sequential,
+                 indices: Iterable[int],
+                 weights: Iterable[float],
+                 norm: str = "l2",
+                 input_transform: Optional[nn.Module] = None
+    ):
         super().__init__()
-        mobi = torchvision.models.mobilenet_v2()
-        self.features = mobi.features
-        self.head = torch.nn.LazyLinear(1)
+        assert isinstance(layers, nn.Sequential)
 
-    def forward(self, x):
-        features = self.features(x)
-        vec = features.mean(dim=(2,3))
-        return self.head(vec)
+        # Disable gradients
+        self.layers = layers
+        for param in self.layers.parameters():
+            param.requires_grad = False
+
+        self.indices = set(indices)
+        self.weights = list(weights)
+        self.max_idx = max(self.indices)
+        assert len(self.indices) == len(self.weights)
+
+        if norm == "l2":
+            self.criterion = nn.MSELoss()
+        elif norm == "l1":
+            self.criterion = nn.L1Loss()
+        else:
+            raise NotImplementedError(norm)
+
+        if input_transform is None:
+            self.input_transform = nn.Identity()
+        else:
+            self.input_transform = input_transform
+
+    def forward(self, x, target):
+        x       = self.input_transform(x)
+        target  = self.input_transform(target)
+
+        x_features = []
+        for i in range(self.max_idx):
+            x = self.layers[i](x)
+            if i in self.indices:
+                x_features.append(x)
+
+        with torch.no_grad():
+            target_features = []
+            for i in range(self.max_idx):
+                target = self.layers[i](target)
+                if i in self.indices:
+                    target_features.append(target)
+
+        loss = 0.0
+        for xf, tf, w in zip(x_features, target_features, self.weights):
+            loss += w * self.criterion(xf, tf)
+
+        return loss

@@ -194,6 +194,32 @@ class ConvertYccToRGB(torch.nn.Module):
         return rgb.transpose(0,1)
 
 
+class ConvertRGBToYcc(torch.nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+        # Uses values from libjpeg-6b. See "jccolor.c"
+        #
+        # * The conversion equations to be implemented are therefore
+        # *	Y  =  0.29900 * R + 0.58700 * G + 0.11400 * B
+        # *	Cb = -0.16874 * R - 0.33126 * G + 0.50000 * B  + CENTERJSAMPLE
+        # *	Cr =  0.50000 * R - 0.41869 * G - 0.08131 * B  + CENTERJSAMPLE
+        matrix = torch.tensor(
+            [[ 0.29900,  0.58700,  0.11400],
+             [-0.16874, -0.33126,  0.50000],
+             [ 0.50000, -0.41869, -0.08131]], dtype=torch.float32
+        )
+        offset = torch.tensor([0.0, 128/255, 128/255], dtype=torch.float32)
+        self.register_buffer("conv_matrix", matrix)
+        self.register_buffer("offset", offset)
+
+    def forward(self, x):
+        yuv = torch.einsum("rc,cbhw->rbhw", self.conv_matrix, x.transpose(0,1))
+        yuv = yuv.transpose(0,1) + self.offset.view(1, 3, 1, 1)
+        return yuv
+
+
 class InverseDCT(torch.nn.Module):
 
     def __init__(self, luma_mean=None, luma_std=None,
