@@ -117,7 +117,7 @@ class FlareChroma(nn.Module):
         if ysize != csize:
             y = torchvision.transforms.functional.resize(y, csize)
         # Prepare input
-        x = torch.cat([y, cb, cr])
+        x = torch.cat([y, cb, cr], dim=1)
         # Compute DCT coefficients (or residuals) for Cb, Cr
         cbcr = self.chroma(x, qt_c)
         cb_r, cr_r = torch.split(cbcr, 64, dim=1)
@@ -154,5 +154,5 @@ class FlareNet(nn.Module):
         if ysize != csize:
             cb_r = torchvision.transforms.functional.resize(cb_r, ysize)
             cr_r = torchvision.transforms.functional.resize(cr_r, ysize)
-        ycc = torch.cat([y, cb, cr])
+        ycc = torch.cat([y_r, cb_r, cr_r], dim=1)
         return self.out_transform(ycc)
