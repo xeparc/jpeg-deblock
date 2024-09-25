@@ -203,7 +203,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
             use_hq_dct: bool,
             use_qt: bool,
             seed = None,
-            device = "cpu",
+            # device = "cpu",
             cached: bool = False,
             cache_memory: float = 16.0
     ):
@@ -235,7 +235,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         self.use_hq_dct = use_hq_dct
         self.use_qt = use_qt
         self.seed = seed
-        self.device = torch.device(device)
+        # self.device = torch.device(device)
         self.cached = cached
 
         self.image_paths = []
@@ -378,7 +378,7 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         res = {}
         for k, collection in temp.items():
             if isinstance(collection[0], torch.Tensor):
-                res[k] = torch.stack(collection, dim=0).to(device=device)
+                res[k] = torch.stack(collection, dim=0)#.to(device=device)
             else:
                 res[k] = collection
         return res

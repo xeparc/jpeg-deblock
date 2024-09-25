@@ -217,8 +217,11 @@ def build_model(config):
         chroma_kwargs = dict(config.MODEL.FLARE.CHROMA.KWARGS)
         chroma = FlareChroma(idct, **chroma_kwargs)
         # Build Flare model
-        flare_kwargs = dict(config.FLARE.KWARGS)
+        flare_kwargs = dict(config.MODEL.FLARE.KWARGS)
         model = FlareNet(luma, chroma, **flare_kwargs)
+
+    elif config.MODEL.CLASS == "MobileNetQA":
+        raise NotImplementedError
 
     else:
         raise NotImplementedError
@@ -300,7 +303,7 @@ def build_dataloader(config, kind: str, quality: int = 0):
         num_workers         = config.DATA.NUM_WORKERS,
         collate_fn          = functools.partial(dataset.collate_fn, device=device),
         pin_memory          = config.DATA.PIN_MEMORY,
-        pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE if config.DATA.PIN_MEMORY else ''
+        # pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE if config.DATA.PIN_MEMORY else ''
     )
 
     return dataloader

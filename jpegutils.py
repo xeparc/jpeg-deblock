@@ -199,10 +199,11 @@ def upsample_chrominance(ycc: List[np.ndarray], subsample: str) -> List[np.ndarr
     Y, Cb, Cr = ycc
     crop_h, crop_w = Y.shape
     h_repeat, w_repeat = SUBSAMPLE_FACTORS[subsample]
-    # cb = np.repeat(np.repeat(Cb, h_repeat, axis=0), w_repeat, axis=1)
-    # cr = np.repeat(np.repeat(Cr, h_repeat, axis=0), w_repeat, axis=1)
-    cb = zoom(Cb, (h_repeat, w_repeat), order=1)
-    cr = zoom(Cr, (h_repeat, w_repeat), order=1)
+    if h_repeat == 1 and w_repeat == 1:
+        cb, cr = Cb, Cr
+    else:
+        cb = zoom(Cb, (h_repeat, w_repeat), order=1)
+        cr = zoom(Cr, (h_repeat, w_repeat), order=1)
     return [Y, cb[:crop_h, :crop_w], cr[:crop_h, :crop_w] ]
 
 

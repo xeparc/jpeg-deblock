@@ -167,13 +167,13 @@ def clip_gradients(model, max_norm: float, how: str):
 
 def collect_inputs(model, batch):
     if isinstance(model, RRDBNet):
-        return dict(x=batch["lq_ycc"])
+        result = dict(x=batch["lq_ycc"])
     elif isinstance(model, PrismLumaS4):
-        return dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
+        result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
     elif isinstance(model, FlareLuma):
-        return dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"], qt=batch["qt_y"])
+        result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"], qt=batch["qt_y"])
     elif isinstance(model, FlareNet):
-        return dict(
+        result = dict(
             y=      batch["lq_y"],
             cb=     batch["lq_cb"],
             cr=     batch["lq_cr"],
@@ -185,6 +185,7 @@ def collect_inputs(model, batch):
         )
     else:
         raise NotImplementedError
+    return result
 
 
 def collect_target(model, batch):

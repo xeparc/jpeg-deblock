@@ -40,6 +40,7 @@ def train(
 ):
 
     current_iter =          start_iter
+    device =                config.TRAIN.DEVICE
     accum =                 config.TRAIN.ACCUMULATE_GRADS
     clip_grad_method =      config.TRAIN.CLIP_GRAD_METHOD
     max_norm =              config.TRAIN.CLIP_GRAD
@@ -47,115 +48,96 @@ def train(
     log_every =             config.LOGGING.LOG_EVERY
     total_iters =           config.TRAIN.NUM_ITERATIONS
 
+    dataiter = iter(dataloader)
+    batch = next(dataiter)
     while current_iter < max_iters:
-        for batch in dataloader:
-            tic = time.time()
-            # Check if we exceeded `max_iters`
-            current_iter += 1
-            if current_iter > max_iters:
-                break
-            # Advance current iteration step in `monitor`
-            monitor.step()
+        tic = time.time()
+        # Advance iteration number
+        current_iter += 1
+        monitor.step()
 
-            optimizer.zero_grad()
+        # Zero gradients
+        optimizer.zero_grad()
 
-            # Collect inputs
-            inputs = collect_inputs(model, batch)
-            target = collect_target(model, batch)
+        # Collect input arguments to `model` & target
+        inputs = collect_inputs(model, batch)
+        target = collect_target(model, batch)
 
-            # Run forward pass, make predictions
-            preds = model(**inputs)
+        # Transfer inputs & target to device
+        inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
+        target = target.to(device=device, non_blocking=True)
 
-            # Calculate loss
-            loss = torch.nn.functional.mse_loss(preds, target) / accum
-            loss.backward()
+        # Run forward pass (asynchronous)
+        preds = model(**inputs)
 
-            # Update parameters
-            if current_iter % accum == 0:
-                # Clip gradients
-                clip_gradients(model, max_norm, clip_grad_method)
-                # We're about to log. Save old paramters
-                if current_iter % log_every == 0:
-                    old_params = {n: p.detach() for n, p in model.named_parameters()}
-                else:
-                    old_params = None
-                optimizer.step()
-                lr_scheduler.step()
+        # Calculate loss
+        loss = torch.nn.functional.mse_loss(preds, target) / accum
 
-            # Track stats
-            batch_time = time.time() - tic
-            loss_ = accum * loss.detach().item()
-            psnr_ = -10.0 * np.log10(loss_)
-            lr_   = lr_scheduler.get_last_lr()[0]
-            eta   = int(batch_time * (total_iters - current_iter))
-            monitor.add_scalar({"loss": loss_, "lr": lr_, "psnr": psnr_})
+        # Run backward pass
+        loss.backward()
 
-            # Log stats
+        # Fetch next datapoint, while backward pass runs asynchronously on device
+        try:
+            batch = next(dataiter)
+        except StopIteration:
+            dataiter = iter(dataloader)
+            batch = next(dataiter)
+
+        # Update parameters
+        if current_iter % accum == 0:
+            # Clip gradients
+            clip_gradients(model, max_norm, clip_grad_method)
+            # We're about to log. Save old paramters
             if current_iter % log_every == 0:
-                monitor.log(
-                    logging.INFO,
-                    f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
-                    f"time: {batch_time:.2f}\t"
-                    f"eta: {datetime.timedelta(seconds=eta)}\t"
-                    f"loss: {loss_:.4f}\t"
-                    f"psnr: {psnr_:.5f}\t"
-                    f"lr: {lr_:.6f}\t"
-                    f"memory: {get_alloc_memory(config):.0f}MB"
-                )
-                # Log gradient norms
-                monitor.log_grad_norms(model.named_parameters())
-                # Log parameters
-                monitor.log_params(model.named_parameters())
-                # Log relative parameter updates
-                monitor.log_param_updates(old_params, model.named_parameters())
-                del old_params
+                old_params = {n: p.detach().clone() for n, p in model.named_parameters()}
+            else:
+                old_params = None
+            optimizer.step()
+            lr_scheduler.step()
 
-            # Checkpoint model
-            if current_iter % checkpoint_every == 0:
-                savestate = {
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                    "iteration": current_iter,
-                }
-                save_checkpoint(savestate, config, monitor)
+        # Syncronize
+        # if device == "mps":
+        #     torch.mps.synchronize()
+        # elif device == "cuda":
+        #     torch.cuda.synchronize()
 
+        # Track stats
+        loss_ = accum * loss.detach().item()
+        psnr_ = -10.0 * np.log10(loss_)
+        lr_   = lr_scheduler.get_last_lr()[0]
+        batch_time = time.time() - tic
+        eta   = int(batch_time * (total_iters - current_iter))
+        monitor.add_scalar({"loss": loss_, "lr": lr_, "psnr": psnr_})
 
-# @torch.no_grad()
-# def validate(
-#     config:     CfgNode,
-#     model:      torch.nn.Module,
-#     dataloader: torch.utils.data.DataLoader,
-#     monitor:    TrainingMonitor
-# ):
+        # Log stats
+        if current_iter % log_every == 0:
+            monitor.log(
+                logging.INFO,
+                f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
+                f"time: {batch_time:.2f}\t"
+                f"eta: {datetime.timedelta(seconds=eta)}\t"
+                f"loss: {loss_:.4f}\t"
+                f"psnr: {psnr_:.5f}\t"
+                f"lr: {lr_:.6f}\t"
+                f"memory: {get_alloc_memory(config):.0f}MB"
+            )
+            # Log gradient norms
+            monitor.log_grad_norms(model.named_parameters())
+            # Log parameters
+            monitor.log_params(model.named_parameters())
+            # Log relative parameter updates
+            monitor.log_param_updates(old_params, model.named_parameters())
+            del old_params
 
-#     tic = time.time()
-#     total_loss = []
-#     for batch in dataloader:
-#         inputs = collect_inputs(model, batch)
-#         target = collect_target(model, batch)
-#         preds = model(**inputs)
-#         loss = torch.nn.functional.mse_loss(preds, target)
-#         total_loss.append(loss.item())
-
-#     t = int(time.time() - tic)
-#     current_iter = monitor.get_step()
-#     total_iters = config.TRAIN.NUM_ITERATIONS
-#     loss_mean = np.mean(total_loss)
-#     loss_std  = np.std(total_loss)
-#     psnr = -10.0 * np.log10(loss_mean)
-
-#     monitor.log(
-#         logging.INFO,
-#         f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
-#         f"time: {t:.2f}\t"
-#         f"loss: {loss_mean:.4f} ± {loss_std:.4f}\t"
-#         f"psnr: {psnr:.5f}"
-#     )
-#     monitor.add_scalar({"validation/loss": loss_mean,
-#                         "validation/confidence": loss_std,
-#                         "validation/psnr": psnr})
-#     return
+        # Checkpoint model
+        if current_iter % checkpoint_every == 0:
+            savestate = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "lr_scheduler": lr_scheduler.state_dict(),
+                "iteration": current_iter,
+            }
+            save_checkpoint(savestate, config, monitor)
 
 
 @torch.no_grad()
@@ -168,6 +150,7 @@ def validate_v2(
 
     tic = time.time()
     val_losses = {}
+    device = config.TRAIN.DEVICE
 
     if isinstance(quality, int):
         quality = [quality]
@@ -179,6 +162,11 @@ def validate_v2(
         for batch in dataloader:
             inputs = collect_inputs(model, batch)
             target = collect_target(model, batch)
+
+            # Transfer inputs & target to device
+            inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
+            target = target.to(device=device, non_blocking=True)
+
             preds = model(**inputs)
             loss = torch.nn.functional.mse_loss(preds, target)
             val_losses.setdefault(q, []).append(loss.item())
@@ -209,44 +197,6 @@ def validate_v2(
     return
 
 
-# @torch.no_grad()
-# def test_samples(
-#         config:         CfgNode,
-#         model:          torch.nn.Module,
-#         dataloader:     torch.utils.data.DataLoader,
-#         monitor:        TrainingMonitor
-# ):
-
-#     current_iter = monitor.get_step()
-#     total_iters = config.TRAIN.NUM_ITERATIONS
-#     savedir = os.path.join(config.LOGGING.DIR, config.TAG, "testsamples", str(current_iter))
-#     os.makedirs(savedir)
-
-#     to_uint8 = torchvision.transforms.ConvertImageDtype(torch.uint8)
-
-#     tic = time.time()
-#     for batch in dataloader:
-#         inputs = collect_inputs(model, batch)
-#         preds = model(**inputs)
-#         filepaths = batch["filepath"]
-#         quailities = batch["quality"]
-#         for path, pred, q in zip(filepaths, preds, quailities):
-#             name = os.path.basename(path)
-#             # strip extension
-#             name = '.'.join(name.split('.')[:-1])
-#             savepath = os.path.join(savedir, name + f"-q={q}.png")
-#             img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
-#             torchvision.io.write_png(img, savepath)
-#     t = time.time() - tic
-
-#     monitor.log(
-#         logging.INFO,
-#         f"Test samples: [{current_iter:>6}/{total_iters:>6}]\t"
-#         f"time: {t:.2f}\t"
-#     )
-#     return
-
-
 @torch.no_grad()
 def test_samples_v2(
         config:     CfgNode,
@@ -255,7 +205,8 @@ def test_samples_v2(
         monitor:    TrainingMonitor
 ):
     current_iter = monitor.get_step()
-    total_iters = config.TRAIN.NUM_ITERATIONS
+    total_iters  = config.TRAIN.NUM_ITERATIONS
+    device       = config.TRAIN.DEVICE
 
     # Create output directory. `os.makedirs()` is with `exist_ok=False`,
     # because this directory should not exist. It it exists, this function
@@ -274,8 +225,12 @@ def test_samples_v2(
         dataloader = build_dataloader(config, kind="test", quality=q)
         # Iterate trough all test images, encoded with quality = `q`
         for batch in dataloader:
+            # Collect & transfer inputs to device
             inputs = collect_inputs(model, batch)
+            inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
+            # Make predictions
             preds = model(**inputs)
+            # Save images
             filepaths = batch["filepath"]
             for path, pred in zip(filepaths, preds):
                 name = os.path.basename(path)
@@ -314,7 +269,7 @@ def train_validate_loop(
 
     for i in range(0, max_iters, val_every):
         train(config, model, train_loader, optimizer, lr_scheduler,
-              monitor, start_iter=i, max_iters=i+val_every)
+              monitor, start_iter=i, max_iters=min(max_iters, i+val_every))
         # Validate
         validate_v2(config, model, val_qualities, monitor)
         # Test samples
