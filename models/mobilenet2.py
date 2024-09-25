@@ -1,50 +1,28 @@
+from typing import *
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torchvision
 from torchvision.ops import Conv2dNormActivation
 
 
-class InvertedResidual(nn.Module):
 
-    def __init__(self, inp: int, oup: int, kernel_size: int, stride: int, expand_ratio: int):
+class MobileNetQA(nn.Module):
+
+    def __init__(self, in_channels=1):
         super().__init__()
-        self.stride = stride
-        norm_layer = nn.BatchNorm2d
-        hidden_dim = int(round(inp * expand_ratio))
-        self.use_res_connect = self.stride == 1 and inp == oup
-
-        layers = []
-        if expand_ratio != 1:
-            # pw
-            layers.append(
-                Conv2dNormActivation(inp, hidden_dim, kernel_size=1, norm_layer=norm_layer, activation_layer=nn.ReLU6)
-            )
-        layers.extend(
-            [
-                # dw
-                Conv2dNormActivation(
-                    hidden_dim,
-                    hidden_dim,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=(kernel_size-1) // 2,
-                    groups=hidden_dim,
-                    norm_layer=norm_layer,
-                    activation_layer=nn.ReLU6,
-                ),
-                # pw-linear
-                nn.Conv2d(hidden_dim, oup, kernel_size=1, stride=1, padding=0, bias=False),
-                norm_layer(oup),
-            ]
-        )
-        self.conv = nn.Sequential(*layers)
-        self.out_channels = oup
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.use_res_connect:
-            return x + self.conv(x)
+        mobi = torchvision.models.mobilenet_v2()
+        if in_channels != 3:
+            self.stem = nn.Conv2d(in_channels, 3, kernel_size=1)
         else:
-            return self.conv(x)
+            self.stem = nn.Identity()
+        self.features = mobi.features
+        self.head = nn.LazyLinear(1)
+
+    def forward(self, x):
+        x = self.stem(x)
+        features = self.features(x)
+        vec = features.mean(dim=(2,3))
+        return 100 * (0.5 + self.head(vec))
 
 
 class MobileNetIR(nn.Module):
@@ -119,3 +97,46 @@ class MobileNetIR(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._forward_impl(x)
+
+
+class InvertedResidual(nn.Module):
+
+    def __init__(self, inp: int, oup: int, kernel_size: int, stride: int, expand_ratio: int):
+        super().__init__()
+        self.stride = stride
+        norm_layer = nn.BatchNorm2d
+        hidden_dim = int(round(inp * expand_ratio))
+        self.use_res_connect = self.stride == 1 and inp == oup
+
+        layers = []
+        if expand_ratio != 1:
+            # pw
+            layers.append(
+                Conv2dNormActivation(inp, hidden_dim, kernel_size=1, norm_layer=norm_layer, activation_layer=nn.ReLU6)
+            )
+        layers.extend(
+            [
+                # dw
+                Conv2dNormActivation(
+                    hidden_dim,
+                    hidden_dim,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=(kernel_size-1) // 2,
+                    groups=hidden_dim,
+                    norm_layer=norm_layer,
+                    activation_layer=nn.ReLU6,
+                ),
+                # pw-linear
+                nn.Conv2d(hidden_dim, oup, kernel_size=1, stride=1, padding=0, bias=False),
+                norm_layer(oup),
+            ]
+        )
+        self.conv = nn.Sequential(*layers)
+        self.out_channels = oup
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)

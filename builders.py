@@ -221,7 +221,12 @@ def build_model(config):
         model = FlareNet(luma, chroma, **flare_kwargs)
 
     elif config.MODEL.CLASS == "MobileNetQA":
-        raise NotImplementedError
+        if config.MODEL.INPUTS[0] in ("lq_y", "lq_cb", "lq_cr"):
+            model = MobileNetQA(in_channels=1)
+        elif config.MODEL.INPUTS[0] in ("lq_ycc", "lq_rgb"):
+            model = MobileNetQA(in_channels=3)
+        else:
+            raise NotImplementedError("Unsupported inputs: " + str(config.MODEL.INPUTS))
 
     else:
         raise NotImplementedError

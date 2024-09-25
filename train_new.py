@@ -60,8 +60,8 @@ def train(
         optimizer.zero_grad()
 
         # Collect input arguments to `model` & target
-        inputs = collect_inputs(model, batch)
-        target = collect_target(model, batch)
+        inputs = collect_inputs(config, model, batch)
+        target = collect_target(config, model, batch)
 
         # Transfer inputs & target to device
         inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
@@ -160,8 +160,8 @@ def validate_v2(
         dataloader = build_dataloader(config, kind="val", quality=q)
         # Iterate trough validation images
         for batch in dataloader:
-            inputs = collect_inputs(model, batch)
-            target = collect_target(model, batch)
+            inputs = collect_inputs(config, model, batch)
+            target = collect_target(config, model, batch)
 
             # Transfer inputs & target to device
             inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
@@ -188,11 +188,10 @@ def validate_v2(
                             f"validation/confidence-q={q}": loss_std,
                             f"validation/psnr-q={q}": psnr})
 
-    t = int(time.time() - tic)
     monitor.log(
         logging.INFO,
         f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
-        f"time: {t}"
+        f"time: {(time.time() - tic):.2f}"
     )
     return
 
@@ -226,7 +225,7 @@ def test_samples_v2(
         # Iterate trough all test images, encoded with quality = `q`
         for batch in dataloader:
             # Collect & transfer inputs to device
-            inputs = collect_inputs(model, batch)
+            inputs = collect_inputs(config, model, batch)
             inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
             # Make predictions
             preds = model(**inputs)
@@ -273,7 +272,8 @@ def train_validate_loop(
         # Validate
         validate_v2(config, model, val_qualities, monitor)
         # Test samples
-        test_samples_v2(config, model, test_qualities, monitor)
+        if config.TEST.ENABLED:
+            test_samples_v2(config, model, test_qualities, monitor)
         # Plots
         if config.LOGGING.PLOTS:
             monitor.plot_scalars(plots_dir)

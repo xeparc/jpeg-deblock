@@ -84,8 +84,8 @@ _C.DATA.NUM_WORKERS = 0
 _C.MODEL = CN()
 _C.MODEL.NAME = ""
 _C.MODEL.CLASS = ""
-_C.MODEL.INPUTS = "lq_rgb"
-_C.MODEL.TARGETS = "hq_rgb"
+_C.MODEL.INPUTS = ["lq_rgb"]
+_C.MODEL.TARGETS = ["hq_rgb"]
 # _C.MODEL.RGB_OUTPUT = True
 # If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
 _C.MODEL.SHARED_LUMA_CHROMA = True
@@ -220,6 +220,7 @@ _C.VALIDATION.QUALITIES = [10, 20, 40, 60, 80]
 # Test config
 # -----------------------------------------------------------------------------
 _C.TEST = CN()
+_C.TEST.ENABLED = True
 _C.TEST.BATCH_SIZE = 1
 _C.TEST.QUALITIES = [10, 20, 40, 60, 80]
 _C.TEST.REGION_SIZE = 512

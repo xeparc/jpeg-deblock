@@ -165,8 +165,11 @@ def clip_gradients(model, max_norm: float, how: str):
     return result
 
 
-def collect_inputs(model, batch):
-    if isinstance(model, RRDBNet):
+def collect_inputs(config, model, batch):
+    if isinstance(model, MobileNetQA):
+        k = config.MODEL.INPUTS[0]
+        result = dict(x=batch[k])
+    elif isinstance(model, RRDBNet):
         result = dict(x=batch["lq_ycc"])
     elif isinstance(model, PrismLumaS4):
         result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
@@ -188,17 +191,20 @@ def collect_inputs(model, batch):
     return result
 
 
-def collect_target(model, batch):
+def collect_target(config, model, batch):
+    if isinstance(model, MobileNetQA):
+        k = config.MODEL.TARGETS[0]
+        return batch[k]
     if isinstance(model, RRDBNet):
         return batch["hq_ycc"]
-    elif isinstance(model, PrismLumaS4):
+    if isinstance(model, PrismLumaS4):
         return batch["hq_y"]
-    elif isinstance(model, FlareLuma):
+    if isinstance(model, FlareLuma):
         return batch["hq_y"]
-    elif isinstance(model, FlareNet):
+    if isinstance(model, FlareNet):
         return batch["hq_rgb"] if model.rgb_output else batch["hq_ycc"]
-    else:
-        raise NotImplementedError
+    raise NotImplementedError
+
 
 def get_alloc_memory(config):
     if config.TRAIN.DEVICE == "cuda":
