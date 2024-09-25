@@ -5,10 +5,12 @@ import datetime
 import logging
 import os
 import time
+from typing import *
 
 import numpy as np
 import torch
 import torchvision
+import torchvision.transforms.functional
 from yacs.config import CfgNode
 import wandb
 
@@ -27,15 +29,15 @@ from utils import (
 
 
 def train(
-        config: CfgNode,
-        model: torch.nn.Module,
-        dataloader: torch.utils.data.DataLoader,
-        optimizer: torch.optim.Optimizer,
-        lr_scheduler,
-        monitor,
-        start_iter: int,
-        max_iters: int
-    ):
+        config:         CfgNode,
+        model:          torch.nn.Module,
+        dataloader:     torch.utils.data.DataLoader,
+        optimizer:      torch.optim.Optimizer,
+        lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
+        monitor:        TrainingMonitor,
+        start_iter:     int,
+        max_iters:      int
+):
 
     current_iter =          start_iter
     accum =                 config.TRAIN.ACCUMULATE_GRADS
@@ -47,18 +49,21 @@ def train(
 
     while current_iter < max_iters:
         for batch in dataloader:
-            monitor.step()
+            tic = time.time()
+            # Check if we exceeded `max_iters`
             current_iter += 1
             if current_iter > max_iters:
                 break
+            # Advance current iteration step in `monitor`
+            monitor.step()
 
             optimizer.zero_grad()
 
-            # Run forward pass, make predictions
-            tic = time.time()
             # Collect inputs
             inputs = collect_inputs(model, batch)
             target = collect_target(model, batch)
+
+            # Run forward pass, make predictions
             preds = model(**inputs)
 
             # Calculate loss
@@ -71,7 +76,7 @@ def train(
                 clip_gradients(model, max_norm, clip_grad_method)
                 # We're about to log. Save old paramters
                 if current_iter % log_every == 0:
-                    old_params = {n: p.detach().cpu() for n, p in model.named_parameters()}
+                    old_params = {n: p.detach() for n, p in model.named_parameters()}
                 else:
                     old_params = None
                 optimizer.step()
@@ -79,7 +84,7 @@ def train(
 
             # Track stats
             batch_time = time.time() - tic
-            loss_ = accum * loss.detach().cpu().item()
+            loss_ = accum * loss.detach().item()
             psnr_ = -10.0 * np.log10(loss_)
             lr_   = lr_scheduler.get_last_lr()[0]
             eta   = int(batch_time * (total_iters - current_iter))
@@ -103,6 +108,7 @@ def train(
                 monitor.log_params(model.named_parameters())
                 # Log relative parameter updates
                 monitor.log_param_updates(old_params, model.named_parameters())
+                del old_params
 
             # Checkpoint model
             if current_iter % checkpoint_every == 0:
@@ -115,70 +121,170 @@ def train(
                 save_checkpoint(savestate, config, monitor)
 
 
+# @torch.no_grad()
+# def validate(
+#     config:     CfgNode,
+#     model:      torch.nn.Module,
+#     dataloader: torch.utils.data.DataLoader,
+#     monitor:    TrainingMonitor
+# ):
+
+#     tic = time.time()
+#     total_loss = []
+#     for batch in dataloader:
+#         inputs = collect_inputs(model, batch)
+#         target = collect_target(model, batch)
+#         preds = model(**inputs)
+#         loss = torch.nn.functional.mse_loss(preds, target)
+#         total_loss.append(loss.item())
+
+#     t = int(time.time() - tic)
+#     current_iter = monitor.get_step()
+#     total_iters = config.TRAIN.NUM_ITERATIONS
+#     loss_mean = np.mean(total_loss)
+#     loss_std  = np.std(total_loss)
+#     psnr = -10.0 * np.log10(loss_mean)
+
+#     monitor.log(
+#         logging.INFO,
+#         f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
+#         f"time: {t:.2f}\t"
+#         f"loss: {loss_mean:.4f} ± {loss_std:.4f}\t"
+#         f"psnr: {psnr:.5f}"
+#     )
+#     monitor.add_scalar({"validation/loss": loss_mean,
+#                         "validation/confidence": loss_std,
+#                         "validation/psnr": psnr})
+#     return
+
+
 @torch.no_grad()
-def validate(
-    config: CfgNode,
-    model: torch.nn.Module,
-    dataloader: torch.utils.data.DataLoader,
-    monitor: TrainingMonitor
+def validate_v2(
+    config:     CfgNode,
+    model:      torch.nn.Module,
+    quality:    Union[int, List[int]],
+    monitor:    TrainingMonitor
 ):
 
     tic = time.time()
-    total_loss = []
-    for batch in dataloader:
-        inputs = collect_inputs(model, batch)
-        target = collect_target(model, batch)
-        preds = model(**inputs)
-        loss = torch.nn.functional.mse_loss(preds, target)
-        total_loss.append(loss.item())
+    val_losses = {}
 
-    t = int(time.time() - tic)
+    if isinstance(quality, int):
+        quality = [quality]
+
+    for q in quality:
+        # Init dataloader with input image quality = `q`
+        dataloader = build_dataloader(config, kind="val", quality=q)
+        # Iterate trough validation images
+        for batch in dataloader:
+            inputs = collect_inputs(model, batch)
+            target = collect_target(model, batch)
+            preds = model(**inputs)
+            loss = torch.nn.functional.mse_loss(preds, target)
+            val_losses.setdefault(q, []).append(loss.item())
+
     current_iter = monitor.get_step()
     total_iters = config.TRAIN.NUM_ITERATIONS
-    loss_mean = np.mean(total_loss)
-    loss_std  = np.std(total_loss)
-    psnr = -10.0 * np.log10(loss_mean)
 
+    for q, loss_values in val_losses.items():
+        loss_mean = np.mean(loss_values)
+        loss_std  = np.std(loss_values)
+        psnr = -10.0 * np.log10(loss_mean)
+        monitor.log(
+            logging.INFO,
+            f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
+            f"loss, q={q}: {loss_mean:.4f} ± {loss_std:.4f}\t"
+            f"psnr, q={q}: {psnr:.5f}"
+        )
+        monitor.add_scalar({f"validation/loss-q={q}": loss_mean,
+                            f"validation/confidence-q={q}": loss_std,
+                            f"validation/psnr-q={q}": psnr})
+
+    t = int(time.time() - tic)
     monitor.log(
         logging.INFO,
         f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
-        f"time: {t:.2f}\t"
-        f"loss: {loss_mean:.4f} ± {loss_std:.4f}\t"
-        f"psnr: {psnr:.5f}"
+        f"time: {t}"
     )
-    monitor.add_scalar({"validation/loss": loss_mean,
-                        "validation/confidence": loss_std,
-                        "validation/psnr": psnr})
     return
 
 
-@torch.no_grad()
-def test_samples(
-        config:         CfgNode,
-        model:          torch.nn.Module,
-        dataloader:     torch.utils.data.DataLoader,
-        monitor:        TrainingMonitor
-):
+# @torch.no_grad()
+# def test_samples(
+#         config:         CfgNode,
+#         model:          torch.nn.Module,
+#         dataloader:     torch.utils.data.DataLoader,
+#         monitor:        TrainingMonitor
+# ):
 
+#     current_iter = monitor.get_step()
+#     total_iters = config.TRAIN.NUM_ITERATIONS
+#     savedir = os.path.join(config.LOGGING.DIR, config.TAG, "testsamples", str(current_iter))
+#     os.makedirs(savedir)
+
+#     to_uint8 = torchvision.transforms.ConvertImageDtype(torch.uint8)
+
+#     tic = time.time()
+#     for batch in dataloader:
+#         inputs = collect_inputs(model, batch)
+#         preds = model(**inputs)
+#         filepaths = batch["filepath"]
+#         quailities = batch["quality"]
+#         for path, pred, q in zip(filepaths, preds, quailities):
+#             name = os.path.basename(path)
+#             # strip extension
+#             name = '.'.join(name.split('.')[:-1])
+#             savepath = os.path.join(savedir, name + f"-q={q}.png")
+#             img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
+#             torchvision.io.write_png(img, savepath)
+#     t = time.time() - tic
+
+#     monitor.log(
+#         logging.INFO,
+#         f"Test samples: [{current_iter:>6}/{total_iters:>6}]\t"
+#         f"time: {t:.2f}\t"
+#     )
+#     return
+
+
+@torch.no_grad()
+def test_samples_v2(
+        config:     CfgNode,
+        model:      torch.nn.Module,
+        quality:    Union[int, List[int]],
+        monitor:    TrainingMonitor
+):
     current_iter = monitor.get_step()
     total_iters = config.TRAIN.NUM_ITERATIONS
+
+    # Create output directory. `os.makedirs()` is with `exist_ok=False`,
+    # because this directory should not exist. It it exists, this function
+    # will probably overwrite images in it and that's not what we want
     savedir = os.path.join(config.LOGGING.DIR, config.TAG, "testsamples", str(current_iter))
-    os.makedirs(savedir)
+    os.makedirs(savedir, exist_ok=False)
 
     to_uint8 = torchvision.transforms.ConvertImageDtype(torch.uint8)
 
+    if isinstance(quality, int):
+        quality = [quality]
+
     tic = time.time()
-    for batch in dataloader:
-        inputs = collect_inputs(model, batch)
-        preds = model(**inputs)
-        filepaths = batch["filepath"]
-        for path, pred in zip(filepaths, preds):
-            name = os.path.basename(path)
-            # strip extension
-            name = '.'.join(name.split('.')[:-1])
-            savepath = os.path.join(savedir, name + ".png")
-            img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
-            torchvision.io.write_png(img, savepath)
+    for q in quality:
+        # initialize dataloader with quality = `q`
+        dataloader = build_dataloader(config, kind="test", quality=q)
+        # Iterate trough all test images, encoded with quality = `q`
+        for batch in dataloader:
+            inputs = collect_inputs(model, batch)
+            preds = model(**inputs)
+            filepaths = batch["filepath"]
+            for path, pred in zip(filepaths, preds):
+                name = os.path.basename(path)
+                # Strip extension from source filename
+                name = '.'.join(name.split('.')[:-1])
+                savepath = os.path.join(savedir, name + f"-q={q}.png")
+                # Convert image from float32 to uint8 and save it as PNG
+                img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
+                torchvision.io.write_png(img, savepath)
     t = time.time() - tic
 
     monitor.log(
@@ -193,15 +299,15 @@ def train_validate_loop(
         config:         CfgNode,
         model:          torch.nn.Module,
         train_loader:   torch.utils.data.DataLoader,
-        val_loader:     torch.utils.data.DataLoader,
-        test_loader:    torch.utils.data.DataLoader,
         optimizer:      torch.optim.Optimizer,
         lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
         monitor:        TrainingMonitor
 ):
 
-    val_every = config.VALIDATION.EVERY
-    max_iters = config.TRAIN.NUM_ITERATIONS
+    val_every       = config.VALIDATION.EVERY
+    max_iters       = config.TRAIN.NUM_ITERATIONS
+    test_qualities  = config.TEST.QUALITIES
+    val_qualities   = config.VALIDATION.QUALITIES
 
     plots_dir = os.path.join(config.LOGGING.DIR, config.TAG, "plots")
     monitor_path = os.path.join(config.LOGGING.DIR, config.TAG, "monitor.pickle")
@@ -210,9 +316,9 @@ def train_validate_loop(
         train(config, model, train_loader, optimizer, lr_scheduler,
               monitor, start_iter=i, max_iters=i+val_every)
         # Validate
-        validate(config, model, val_loader, monitor)
+        validate_v2(config, model, val_qualities, monitor)
         # Test samples
-        test_samples(config, model, test_loader, monitor)
+        test_samples_v2(config, model, test_qualities, monitor)
         # Plots
         if config.LOGGING.PLOTS:
             monitor.plot_scalars(plots_dir)
@@ -220,35 +326,39 @@ def train_validate_loop(
         # Repeat...
 
 
-def main(cfg):
+def main(cfg: CfgNode):
 
     # Init device
     device = torch.device(cfg.TRAIN.DEVICE)
+
+    # Init logger
+    logger          = build_logger(cfg)
+    logger.log(logging.INFO, "Logger initialized!")
 
     # Init WANDB (is config flag for it is on)
     if cfg.LOGGING.WANDB:
         wandb.init(project=cfg.TAG, config=yacs_to_dict(cfg))
 
+    # Init monitor
+    monitor         = TrainingMonitor(logger, cfg.LOGGING.WANDB)
+
     # Init dataloaders
     train_loader    = build_dataloader(cfg, "train")
-    val_loader      = build_dataloader(cfg, "val")
-    test_loader     = build_dataloader(cfg, "test")
+    logger.log(logging.INFO, "Train dataloader initialized!")
 
     # Init models
     model           = build_model(cfg).to(device)
-    optim           = build_optimizer(cfg, model.parameters())
     if cfg.LOGGING.WANDB:
         wandb.watch(model, log="all", log_freq=100, log_graph=False)
 
-    # Init optimizer
+    # Init optimizer & scheduler
+    optim           = build_optimizer(cfg, model.parameters())
     lr_scheduler    = build_lr_scheduler(cfg, optim)
-    logger          = build_logger(cfg)
-    monitor         = TrainingMonitor(logger, cfg.LOGGING.WANDB)
 
-    # Create checkpoint directory
+    # Check if checkpoint directory already exists. It shouldn't !
     if cfg.TRAIN.CHECKPOINT_EVERY > 0:
-        os.makedirs(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.MODEL.NAME),
-                    exist_ok=True)
+        if os.path.exists(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.TAG)):
+            raise(OSError("Checkpoint directory already exists!"))
 
     # Optionally load checkpoint
     if cfg.TRAIN.RESUME:
@@ -268,13 +378,18 @@ def main(cfg):
         config=             cfg,
         model=              model,
         train_loader=       train_loader,
-        val_loader=         val_loader,
-        test_loader=        test_loader,
         optimizer=          optim,
         lr_scheduler=       lr_scheduler,
         monitor=            monitor
     )
 
+    # Save model & optimizer
+    modelpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "model.pth")
+    optimpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "optimizer.pth")
+    torch.save(model.state_dict(), modelpath)
+    torch.save(optim.state_dict(), optimpath)
+
+    # Exit wandb
     if cfg.LOGGING.WANDB:
         wandb.finish()
 
