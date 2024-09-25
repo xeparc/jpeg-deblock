@@ -22,7 +22,7 @@ class MobileNetQA(nn.Module):
         x = self.stem(x)
         features = self.features(x)
         vec = features.mean(dim=(2,3))
-        return 100 * (0.5 + self.head(vec))
+        return 0.5 + self.head(vec)
 
 
 class MobileNetIR(nn.Module):

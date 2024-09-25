@@ -194,7 +194,8 @@ def collect_inputs(config, model, batch):
 def collect_target(config, model, batch):
     if isinstance(model, MobileNetQA):
         k = config.MODEL.TARGETS[0]
-        return batch[k]
+        # Normalize `quality` to [0,1]
+        return batch[k] / 100
     if isinstance(model, RRDBNet):
         return batch["hq_ycc"]
     if isinstance(model, PrismLumaS4):
