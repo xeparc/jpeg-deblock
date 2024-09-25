@@ -3,7 +3,7 @@ from typing import *
 import torch
 import torch.nn as nn
 import torchvision
-
+from torchvision.ops import Conv2dNormActivation
 
 class PixelwiseFeatures(torch.nn.Module):
     """
@@ -44,6 +44,49 @@ class PixelwiseFeatures(torch.nn.Module):
             x = self.conv_layers[i](x)
             x = torch.nn.functional.relu(x)
         return x
+
+
+class Q1Net(nn.Module):
+
+        def __init__(self, in_channels=3):
+            super().__init__()
+            self.features = nn.Sequential(
+                nn.Conv2d(in_channels, 32, kernel_size=7, stride=2, bias=False),
+                Q1Bottleneck(32, multiplier=2),
+                nn.Conv2d(32, 32, kernel_size=3, bias=False),
+                Q1Bottleneck(32, multiplier=2),
+                Conv2dNormActivation(32, 64, kernel_size=3, bias=False),
+                Q1Bottleneck(64, multiplier=2),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+                Conv2dNormActivation(64, 128, kernel_size=3, bias=False),
+                Q1Bottleneck(128, multiplier=2),
+                Conv2dNormActivation(128, 128, kernel_size=3, bias=False),
+                Q1Bottleneck(128, multiplier=2),
+                Conv2dNormActivation(128, 128, kernel_size=3),
+            )
+            self.head = nn.Linear(128, 1)
+
+        def forward(self, x):
+            x = self.features(x)
+            x = torch.mean(x, dim=(-2, -1))
+            y = self.head(x)
+            return y
+
+
+class Q1Bottleneck(nn.Module):
+
+    def __init__(self, channels, multiplier=2, kernel_size=3):
+        super().__init__()
+        mid = channels * multiplier
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(channels, mid, kernel_size=1),
+            Conv2dNormActivation(mid, mid, kernel_size=kernel_size, padding="same"),
+            nn.Conv2d(mid, channels, kernel_size=1)
+        )
+
+    def forward(self, x):
+        y = self.bottleneck(x)
+        return x + y
 
 
 class PerceptualLoss(nn.Module):

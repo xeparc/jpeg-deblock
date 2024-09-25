@@ -1,0 +1,58 @@
+TAG: Q1Net-RGB-run1
+SEED: 7
+COMMENT: "RGB inputs"
+
+DATA:
+  NAME: "DIV2K"
+  LOCATIONS:
+    TRAIN:  ["data/DIV2K/DIV2K_train_HR"]
+    VAL:    ["data/DIV2K/DIV2K_valid_HR/"]
+    TEST:   ["data/live1/refimgs/"]
+  PATCH_SIZE: 240
+  REGION_SIZE: -1
+  NUM_PATCHES: 16
+  SUBSAMPLE: 444
+  MIN_QUALITY: 5
+  MAX_QUALITY: 100
+  CACHED: False
+  CACHE_MEMORY: 16
+  USE_LQ_RGB: True
+  USE_LQ_YCC: False
+  USE_LQ_DCT: False
+  USE_HQ_RGB: False
+  USE_HQ_YCC: False
+  USE_HQ_DCT: False
+  USE_QTABLES: False
+  PIN_MEMORY: False
+  SHUFFLE: True
+  NUM_WORKERS: 0
+MODEL:
+  NAME: Q1Net-RGB
+  CLASS: Q1Net
+  INPUTS: ["lq_rgb"]
+  TARGETS: ["quality"]
+TRAIN:
+  DEVICE: "mps"
+  BATCH_SIZE: 32
+  NUM_ITERATIONS: 25_000
+  CLIP_GRAD: 10.0
+  CLIP_GRAD_METHOD: "total"
+  BASE_LR: 1.0e-2
+  WARMUP_LR: 1.0e-5
+  LR_SCHEDULER:
+    NAME: cosine
+    KWARGS: [[T_0, 25_000], [eta_min, 5.0e-5], [T_mult, 2]]
+    WARMUP_PREFIX: True
+  CHECKPOINT_EVERY: 500
+  CHECKPOINT_DIR: /Volumes/SiliconPower/jpeg-deblock/checkpoints/
+VALIDATION:
+  BATCH_SIZE: 32
+  EVERY: 500
+  QUALITIES: [10, 20, 30, 40, 50, 60, 80, 90]
+TEST:
+  ENABLED: False
+LOGGING:
+  DIR: /Volumes/SiliconPower/jpeg-deblock/logs/
+  LOG_EVERY: 50
+  WANDB: False
+  PLOTS: True

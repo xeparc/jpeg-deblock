@@ -64,8 +64,8 @@ def train(
         target = collect_target(config, model, batch)
 
         # Transfer inputs & target to device
-        inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
-        target = target.to(device=device, non_blocking=True)
+        inputs = {k: x.to(device=device) for k, x in inputs.items()}
+        target = target.to(device=device)
 
         # Run forward pass (asynchronous)
         preds = model(**inputs)

@@ -166,7 +166,7 @@ def clip_gradients(model, max_norm: float, how: str):
 
 
 def collect_inputs(config, model, batch):
-    if isinstance(model, MobileNetQA):
+    if isinstance(model, (MobileNetQA, Q1Net)):
         k = config.MODEL.INPUTS[0]
         result = dict(x=batch[k])
     elif isinstance(model, RRDBNet):
@@ -192,7 +192,7 @@ def collect_inputs(config, model, batch):
 
 
 def collect_target(config, model, batch):
-    if isinstance(model, MobileNetQA):
+    if isinstance(model, (MobileNetQA, Q1Net)):
         k = config.MODEL.TARGETS[0]
         # Normalize `quality` to [0,1]
         return batch[k] / 100
