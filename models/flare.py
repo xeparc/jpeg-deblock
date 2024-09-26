@@ -108,7 +108,7 @@ class FlareChroma(nn.Module):
         self.residual   = residual
         self.idct       = idct
         self.chroma     = FlareBackbone(3, 128, base_channels, blocks_per_stage,
-                                        channel_multiplier)
+                                        channel_multiplier, weight_scale=1.0)
 
     def forward(self, y, cb, cr, dct_cb, dct_cr, qt_c):
         # Optionally downscale `y` tensor if chroma subsampling != 444
