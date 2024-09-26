@@ -48,6 +48,9 @@ def train(
     log_every =             config.LOGGING.LOG_EVERY
     total_iters =           config.TRAIN.NUM_ITERATIONS
 
+    model.train()
+    optimizer.zero_grad()
+
     dataiter = iter(dataloader)
     batch = next(dataiter)
     while current_iter < max_iters:
@@ -55,9 +58,6 @@ def train(
         # Advance iteration number
         current_iter += 1
         monitor.step()
-
-        # Zero gradients
-        optimizer.zero_grad()
 
         # Collect input arguments to `model` & target
         inputs = collect_inputs(config, model, batch)
@@ -94,12 +94,6 @@ def train(
                 old_params = None
             optimizer.step()
             lr_scheduler.step()
-
-        # Syncronize
-        # if device == "mps":
-        #     torch.mps.synchronize()
-        # elif device == "cuda":
-        #     torch.cuda.synchronize()
 
         # Track stats
         loss_ = accum * loss.detach().item()
@@ -139,6 +133,10 @@ def train(
             }
             save_checkpoint(savestate, config, monitor)
 
+        # Zero gradients
+        if current_iter % accum == 0:
+            optimizer.zero_grad()
+
 
 @torch.no_grad()
 def validate_v2(
@@ -164,8 +162,8 @@ def validate_v2(
             target = collect_target(config, model, batch)
 
             # Transfer inputs & target to device
-            inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
-            target = target.to(device=device, non_blocking=True)
+            inputs = {k: x.to(device=device) for k, x in inputs.items()}
+            target = target.to(device=device)
 
             preds = model(**inputs)
             loss = torch.nn.functional.mse_loss(preds, target)
@@ -226,7 +224,7 @@ def test_samples_v2(
         for batch in dataloader:
             # Collect & transfer inputs to device
             inputs = collect_inputs(config, model, batch)
-            inputs = {k: x.to(device=device, non_blocking=True) for k, x in inputs.items()}
+            inputs = {k: x.to(device=device) for k, x in inputs.items()}
             # Make predictions
             preds = model(**inputs)
             # Save images
