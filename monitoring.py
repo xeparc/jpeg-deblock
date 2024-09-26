@@ -47,9 +47,9 @@ class TrainingMonitor:
             wandb.log({name: wandb.Image(data, mode=mode, caption=name)},
                       step=self._step, commit=False)
 
-    def log_grad_norms(self, named_parameters: Mapping):
+    def log_grad_norms(self, named_parameters: Mapping[str, torch.nn.Parameter]):
         for name, param in named_parameters:
-            if param.grad is not None:
+            if param.requires_grad:
                 norm = torch.linalg.norm(param.grad).item()
                 std = param.grad.std().item()
                 msg = f"\t[{name}]: grad norm = {norm}"
@@ -63,6 +63,8 @@ class TrainingMonitor:
 
     def log_params(self, named_parameters: Mapping):
         for name, param in named_parameters:
+            if not param.requires_grad:
+                continue
             u = param.mean().item()
             s = param.std().item()
             msg  = f"\t[{name}]: parameter = {u} ± {s}"
@@ -80,6 +82,8 @@ class TrainingMonitor:
         old = dict(old)
         new = dict(new)
         for name, new_param in new.items():
+            if not new_param.requires_grad:
+                continue
             if name not in old:
                 continue
             diff = new_param.detach() - old[name].detach()
