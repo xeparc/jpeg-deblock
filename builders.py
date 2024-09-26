@@ -323,21 +323,17 @@ def build_dataloader(config, kind: str, quality: int = 0):
 
 
 def build_criterion(config):
-    kwargs = {k:v for k,v in config.LOSS.CRITERION_KWARGS}
-    if config.LOSS.CRITERION == "huber":
+    kwargs = {k:v for k,v in config.LOSS.KWARGS}
+    if config.LOSS.CRITERION == "HuberLoss":
         criterion = torch.nn.HuberLoss(**kwargs)
-    elif config.LOSS.CRITERION == "mse":
+    elif config.LOSS.CRITERION == "MSELoss":
         criterion = torch.nn.MSELoss(**kwargs)
+    elif config.LOSS.CRITERION == "MixedQ1MSELoss":
+        criterion = MixedQ1MSELoss(**kwargs)
     else:
-        raise ValueError
+        raise NotImplementedError
 
-    return CombinedLoss(
-        criterion=      criterion,
-        luma_weight=    config.LOSS.LUMA_WEIGHT,
-        chroma_weight=  config.LOSS.CHROMA_WEIGHT,
-        alpha=          config.LOSS.ALPHA,
-        beta=           config.LOSS.BETA
-    )
+    return criterion
 
 
 def build_optimizer(config, *params_list):

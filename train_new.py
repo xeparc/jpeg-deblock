@@ -32,6 +32,7 @@ def train(
         config:         CfgNode,
         model:          torch.nn.Module,
         dataloader:     torch.utils.data.DataLoader,
+        criterion:      Callable,
         optimizer:      torch.optim.Optimizer,
         lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
         monitor:        TrainingMonitor,
@@ -71,7 +72,7 @@ def train(
         preds = model(**inputs)
 
         # Calculate loss
-        loss = torch.nn.functional.mse_loss(preds, target) / accum
+        loss = criterion(preds, target) / accum
 
         # Run backward pass
         loss.backward()
@@ -142,6 +143,7 @@ def train(
 def validate_v2(
     config:     CfgNode,
     model:      torch.nn.Module,
+    criterion:  Callable,
     quality:    Union[int, List[int]],
     monitor:    TrainingMonitor
 ):
@@ -166,7 +168,7 @@ def validate_v2(
             target = target.to(device=device)
 
             preds = model(**inputs)
-            loss = torch.nn.functional.mse_loss(preds, target)
+            loss = criterion(preds, target)
             val_losses.setdefault(q, []).append(loss.item())
 
     current_iter = monitor.get_step()
@@ -251,6 +253,7 @@ def train_validate_loop(
         config:         CfgNode,
         model:          torch.nn.Module,
         train_loader:   torch.utils.data.DataLoader,
+        criterion:      Callable,
         optimizer:      torch.optim.Optimizer,
         lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
         monitor:        TrainingMonitor
@@ -265,10 +268,10 @@ def train_validate_loop(
     monitor_path = os.path.join(config.LOGGING.DIR, config.TAG, "monitor.pickle")
 
     for i in range(0, max_iters, val_every):
-        train(config, model, train_loader, optimizer, lr_scheduler,
+        train(config, model, train_loader, criterion, optimizer, lr_scheduler,
               monitor, start_iter=i, max_iters=min(max_iters, i+val_every))
         # Validate
-        validate_v2(config, model, val_qualities, monitor)
+        validate_v2(config, model, criterion, val_qualities, monitor)
         # Test samples
         if config.TEST.ENABLED:
             test_samples_v2(config, model, test_qualities, monitor)
@@ -304,6 +307,9 @@ def main(cfg: CfgNode):
     if cfg.LOGGING.WANDB:
         wandb.watch(model, log="all", log_freq=100, log_graph=False)
 
+    # Init criterion
+    criterion = build_criterion(cfg)
+
     # Init optimizer & scheduler
     optim           = build_optimizer(cfg, model.parameters())
     lr_scheduler    = build_lr_scheduler(cfg, optim)
@@ -331,6 +337,7 @@ def main(cfg: CfgNode):
         config=             cfg,
         model=              model,
         train_loader=       train_loader,
+        criterion=          criterion,
         optimizer=          optim,
         lr_scheduler=       lr_scheduler,
         monitor=            monitor

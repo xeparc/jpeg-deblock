@@ -232,6 +232,8 @@ _C.TEST.REGION_SIZE = 512
 _C.LOSS = CN()
 # Name of the loss function / criterion used from PyTorch library
 _C.LOSS.CRITERION = "huber"
+# Keyword arguments passed to criterion constructor
+_C.LOSS.KWARGS = []
 # Multiplier of Luminance (Y) plane loss in total Spectral Loss
 _C.LOSS.LUMA_WEIGHT = 0.5
 # Multiplier of Chrominance (Cb, Cr) planes loss in total Spectral Loss
