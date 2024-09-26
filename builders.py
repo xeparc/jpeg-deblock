@@ -340,26 +340,31 @@ def build_criterion(config):
     )
 
 
-def build_optimizer(config, *params):
+def build_optimizer(config, *params_list):
 
     name = config.TRAIN.OPTIMIZER.NAME
     kwargs = {k:v for k,v in config.TRAIN.OPTIMIZER.KWARGS}
 
+    # Collect parameters with `require_grad=True`
+    trainable_params = []
+    for param in params_list:
+        trainable_params.extend(p for p in param if p.requires_grad)
+
     if name == "adamw":
         optim = torch.optim.AdamW(
-            params=[{"params": p} for p in params],
+            params=trainable_params,
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )
     elif name == "sgd":
         optim = torch.optim.SGD(
-            params=[{"params": p} for p in params],
+            params=trainable_params,
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )
     elif name == "rmsprop":
         optim = torch.optim.RMSprop(
-            params=[{"params": p} for p in params],
+            params=trainable_params,
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )

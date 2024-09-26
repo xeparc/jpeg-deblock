@@ -126,33 +126,32 @@ class FlareChroma(nn.Module):
         # Apply inverse DCT transform to get Cb, Cr channels
         cb = self.idct(dct_cb, chroma=True)
         cr = self.idct(dct_cr, chroma=True)
-        return cb, cr
+        return torch.cat([cb, cr], dim=1)
 
 
 class FlareNet(nn.Module):
 
     def __init__(self, luma_net: nn.Module, chroma_net: nn.Module, rgb_output=True,
-                 luma_params="", freeze_luma=False):
+                 luma_params="", freeze_luma=False, use_hq_luma=False):
         super().__init__()
         self.rgb_output     = rgb_output
         self.luma           = luma_net
         self.chroma         = chroma_net
         self.out_transform  = ConvertYccToRGB() if rgb_output else nn.Identity()
+        self.use_hq_luma    = use_hq_luma
         if luma_params:
             state = torch.load(luma_params, weights_only=True, map_location="cpu")
             self.luma.load_state_dict(state)
-        if freeze_luma:
-            for param in self.luma.parameters():
-                param.requires_grad = False
+        if freeze_luma or use_hq_luma:
+            self.luma.requires_grad_(False)
 
     def forward(self, y, cb, cr, dct_y, dct_cb, dct_cr, qt_y, qt_c):
-        y_r         = self.luma(y, dct_y, qt_y)
-        cb_r, cr_r  = self.chroma(y_r, cb, cr, dct_cb, dct_cr, qt_c)
+        y_r     = y if self.use_hq_luma else self.luma(y, dct_y, qt_y)
+        cbcr_r  = self.chroma(y_r, cb, cr, dct_cb, dct_cr, qt_c)
         # Optionally upsample chroma
         ysize = y_r.shape[-2:]
-        csize = cb_r.shape[-2:]
+        csize = cbcr_r.shape[-2:]
         if ysize != csize:
-            cb_r = torchvision.transforms.functional.resize(cb_r, ysize)
-            cr_r = torchvision.transforms.functional.resize(cr_r, ysize)
-        ycc = torch.cat([y_r, cb_r, cr_r], dim=1)
+            cbcr_r = torchvision.transforms.functional.resize(cbcr_r, ysize)
+        ycc = torch.cat([y_r, cbcr_r], dim=1)
         return self.out_transform(ycc)

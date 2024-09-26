@@ -175,9 +175,18 @@ def collect_inputs(config, model, batch):
         result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
     elif isinstance(model, FlareLuma):
         result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"], qt=batch["qt_y"])
+    elif isinstance(model, FlareChroma):
+        result = dict(
+            y=      batch["hq_y"],
+            cb=     batch["lq_cb"],
+            cr=     batch["lq_cr"],
+            dct_cb= batch["lq_dct_cb"],
+            dct_cr= batch["lq_dct_cr"],
+            qt_c=   batch["qt_c"]
+        )
     elif isinstance(model, FlareNet):
         result = dict(
-            y=      batch["lq_y"],
+            y=      batch["hq_y"] if model.use_hq_luma else batch["lq_y"],
             cb=     batch["lq_cb"],
             cr=     batch["lq_cr"],
             dct_y=  batch["lq_dct_y"],
@@ -202,6 +211,8 @@ def collect_target(config, model, batch):
         return batch["hq_y"]
     if isinstance(model, FlareLuma):
         return batch["hq_y"]
+    if isinstance(model, FlareChroma):
+        return torch.cat([batch["hq_cb"], batch["hq_cr"]], dim=1)
     if isinstance(model, FlareNet):
         return batch["hq_rgb"] if model.rgb_output else batch["hq_ycc"]
     raise NotImplementedError
