@@ -446,6 +446,7 @@ def build_logger(config, name="train"):
     logger.addHandler(info_handler)
     logger.addHandler(debug_handler)
     logger.addHandler(stdout_handler)
+    pid = os.getpid()
     logger.warning("\n\n\t\t=== > STARTING TRAINING === >\n")
-
+    logger.warning("\t\tProcess PID: ", pid, "\n\n")
     return logger
