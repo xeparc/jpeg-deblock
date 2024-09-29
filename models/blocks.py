@@ -1,64 +1,7 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-# class DenseLayer(nn.Module):
-#     def __init__(self, in_channels, growth_rate):
-#         super().__init__()
-#         self.conv = nn.Conv2d(in_channels, growth_rate, kernel_size=3, padding=1, bias=True)
-#         self.relu = nn.ReLU(inplace=True)
-
-#     def forward(self, x):
-#         out = self.conv(x)
-#         out = self.relu(out)
-#         return torch.cat([x, out], 1)
-
-
-# class QFAttention(nn.Module):
-#     def __init__(self, in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True, mode='CRC', negative_slope=0.2):
-#         super(QFAttention, self).__init__()
-
-#         assert in_channels == out_channels, 'Only support in_channels==out_channels.'
-#         if mode[0] in ['R', 'L']:
-#             mode = mode[0].lower() + mode[1:]
-
-#         self.res = conv(in_channels, out_channels, kernel_size, stride, padding, bias, mode, negative_slope)
-
-#     def forward(self, x, gamma, beta):
-#         gamma = gamma.unsqueeze(-1).unsqueeze(-1)
-#         beta = beta.unsqueeze(-1).unsqueeze(-1)
-#         res = (gamma)*self.res(x) + beta
-#         return x + res
-
-# class ResidualDenseBlock(nn.Module):
-#     def __init__(self, in_channels, growth_rate, num_layers):
-#         super().__init__()
-#         self.num_layers = num_layers
-#         self.growth_rate = growth_rate
-#         self.layers = self.make_dense_layers(in_channels, growth_rate, num_layers)
-#         self.conv1x1 = nn.Conv2d(in_channels + num_layers * growth_rate, in_channels, kernel_size=1, padding=0, bias=True)
-
-#     def make_dense_layers(self, in_channels, growth_rate, num_layers):
-#         layers = []
-#         for i in range(num_layers):
-#             layers.append(DenseLayer(in_channels + i * growth_rate, growth_rate))
-#         return nn.Sequential(*layers)
-
-#     def forward(self, x):
-#         out = self.layers(x)
-#         out = self.conv1x1(out)
-#         return out + x
-
-# Example usage:
-# Creating an RDB with 5 dense layers, each with a growth rate of 32
-# rdb = ResidualDenseBlock(in_channels=64, growth_rate=32, num_layers=5)
-
-
-# def make_layer(block, n_layers):
-#     layers = []
-#     for _ in range(n_layers):
-#         layers.append(block())
-#     return nn.Sequential(*layers)
 
 
 class ResidualDenseBlock4C(nn.Module):
@@ -141,61 +84,11 @@ class DSConv2d(nn.Module):
         return self.dsconv(x)
 
 
-class ResidualDenseBlock_5C(nn.Module):
-    def __init__(self, nf=64, gc=32, bias=True):
-        super(ResidualDenseBlock_5C, self).__init__()
-        # gc: growth channel, i.e. intermediate channels
-        self.conv1 = nn.Conv2d(nf, gc, 3, 1, 1, bias=bias)
-        self.conv2 = nn.Conv2d(nf + gc, gc, 3, 1, 1, bias=bias)
-        self.conv3 = nn.Conv2d(nf + 2 * gc, gc, 3, 1, 1, bias=bias)
-        self.conv4 = nn.Conv2d(nf + 3 * gc, gc, 3, 1, 1, bias=bias)
-        self.conv5 = nn.Conv2d(nf + 4 * gc, nf, 3, 1, 1, bias=bias)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
-
-        # Initialization
-        init_kwargs = dict(nonlinearity="leaky_relu", a=0.2)
-        torch.nn.init.kaiming_uniform_(self.conv1.weight, **init_kwargs)
-        torch.nn.init.kaiming_uniform_(self.conv2.weight, **init_kwargs)
-        torch.nn.init.kaiming_uniform_(self.conv3.weight, **init_kwargs)
-        torch.nn.init.kaiming_uniform_(self.conv4.weight, **init_kwargs)
-        torch.nn.init.kaiming_uniform_(self.conv5.weight, **init_kwargs)
-        # ! IMPORTANT ! Scale weights by factor of 0.1
-        self.conv1.weight.data *= 0.1
-        self.conv2.weight.data *= 0.1
-        self.conv3.weight.data *= 0.1
-        self.conv4.weight.data *= 0.1
-        self.conv5.weight.data *= 0.1
-
-    def forward(self, x):
-        x1 = self.lrelu(self.conv1(x))
-        x2 = self.lrelu(self.conv2(torch.cat((x, x1), 1)))
-        x3 = self.lrelu(self.conv3(torch.cat((x, x1, x2), 1)))
-        x4 = self.lrelu(self.conv4(torch.cat((x, x1, x2, x3), 1)))
-        x5 = self.conv5(torch.cat((x, x1, x2, x3, x4), 1))
-        return x5 * 0.2 + x
-
-
-class RRDB(nn.Module):
-    '''Residual in Residual Dense Block'''
-
-    def __init__(self, nf, gc=32):
-        super(RRDB, self).__init__()
-        self.RDB1 = ResidualDenseBlock_5C(nf, gc)
-        self.RDB2 = ResidualDenseBlock_5C(nf, gc)
-        self.RDB3 = ResidualDenseBlock_5C(nf, gc)
-
-    def forward(self, x):
-        out = self.RDB1(x)
-        out = self.RDB2(out)
-        out = self.RDB3(out)
-        return out * 0.2 + x
-
-
 class RRDB4(nn.Module):
     '''Residual in Residual Dense Block'''
 
     def __init__(self, in_channels, growth=32):
-        super(RRDB, self).__init__()
+        super().__init__()
         self.RDB1 = ResidualDenseBlock4C(in_channels, growth)
         self.RDB2 = ResidualDenseBlock4C(in_channels, growth)
         self.RDB3 = ResidualDenseBlock4C(in_channels, growth)
@@ -208,6 +101,76 @@ class RRDB4(nn.Module):
         out = self.RDB4(out)
         return out * 0.2 + x
 
+
+class  ToDCTTensor:
+
+    def __init__(self,
+                 luma_mean=None, luma_std=None,
+                 chroma_mean=None, chroma_std=None,
+        ):
+        if luma_mean is not None:
+            assert luma_mean.shape == (8,8)
+            self.luma_mean = torch.as_tensor(luma_mean).float()
+        else:
+            self.luma_mean = torch.zeros((8,8), dtype=torch.float32)
+
+        if luma_std is not None:
+            assert luma_std.shape == (8,8)
+            self.luma_std = torch.as_tensor(luma_std).float()
+        else:
+            self.luma_std = torch.ones((8,8), dtype=torch.float32)
+
+        if luma_mean is None and luma_std is None:
+            self.skip_luma = True
+        else:
+            self.skip_luma = False
+
+        if chroma_mean is not None:
+            assert chroma_mean.shape == (8,8)
+            self.chroma_mean = torch.as_tensor(chroma_mean).float()
+        else:
+            self.chroma_mean = torch.zeros((8,8), dtype=torch.float32)
+
+        if chroma_std is not None:
+            assert chroma_std.shape == (8,8)
+            self.chroma_std = torch.as_tensor(chroma_std).float()
+        else:
+            self.chroma_std = torch.ones((8,8), dtype=torch.float32)
+
+        if chroma_mean is None and chroma_std is None:
+            self.skip_chroma = True
+        else:
+            self.skip_chroma = False
+
+    def __call__(self, dct: np.ndarray, chroma: bool):
+        assert dct.ndim == 4
+        assert dct.shape[2] == dct.shape[3] == 8
+        out_shape = dct.shape[:-2] + (64,)
+        dct = torch.from_numpy(dct)
+        if chroma:
+            if self.skip_chroma:
+                res = dct
+            else:
+                res = (dct - self.chroma_mean) / self.chroma_std
+        else:
+            if self.skip_luma:
+                res = dct
+            else:
+                res = (dct - self.luma_mean) / self.luma_std
+        return res.view(out_shape).permute(2,0,1).contiguous()
+
+
+class ToQTTensor(nn.Module):
+
+    def __init__(self, invert=False):
+        self.invert = invert
+
+    def __call__(self, qtable: np.ndarray):
+        x = torch.as_tensor((qtable.astype(np.float32) - 1) / 254).ravel()
+        if self.invert:
+            return 1.0 - x
+        else:
+            return x
 
 
 class ConvertYccToRGB(torch.nn.Module):

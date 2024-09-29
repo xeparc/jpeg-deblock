@@ -140,7 +140,7 @@ class FlareChroma(nn.Module):
         return torch.cat([cb, cr], dim=1)
 
 
-class FlareNet(nn.Module):
+class Flare(nn.Module):
 
     def __init__(self, luma_net: nn.Module, chroma_net: nn.Module, rgb_output=True,
                  luma_params="", freeze_luma=False, use_hq_luma=False):

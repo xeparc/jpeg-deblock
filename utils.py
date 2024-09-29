@@ -171,7 +171,7 @@ def collect_inputs(config, model, batch):
         result = dict(x=batch[k])
     elif isinstance(model, RRDBNet):
         result = dict(x=batch["lq_ycc"])
-    elif isinstance(model, PrismLumaS4):
+    elif isinstance(model, Prism):
         result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"])
     elif isinstance(model, FlareLuma):
         result = dict(y=batch["lq_y"], dct_y=batch["lq_dct_y"], qt=batch["qt_y"])
@@ -184,7 +184,7 @@ def collect_inputs(config, model, batch):
             dct_cr= batch["lq_dct_cr"],
             qt_c=   batch["qt_c"]
         )
-    elif isinstance(model, FlareNet):
+    elif isinstance(model, Flare):
         result = dict(
             y=      batch["hq_y"] if model.use_hq_luma else batch["lq_y"],
             cb=     batch["lq_cb"],
@@ -207,13 +207,13 @@ def collect_target(config, model, batch):
         return batch[k] / 100
     if isinstance(model, RRDBNet):
         return batch["hq_ycc"]
-    if isinstance(model, PrismLumaS4):
+    if isinstance(model, Prism):
         return batch["hq_y"]
     if isinstance(model, FlareLuma):
         return batch["hq_y"]
     if isinstance(model, FlareChroma):
         return torch.cat([batch["hq_cb"], batch["hq_cr"]], dim=1)
-    if isinstance(model, FlareNet):
+    if isinstance(model, Flare):
         return batch["hq_rgb"] if model.rgb_output else batch["hq_ycc"]
     raise NotImplementedError
 

@@ -7,8 +7,11 @@ _C = CN()
 # Base config files
 _C.BASE = ['']
 
+# Seed
 _C.SEED = 7
-_C.TAG = "default"
+# Train run tag. Used to initialize log and checkpoint directories
+_C.TAG = ""
+# Train run comment. Free text
 _C.COMMENT = ""
 
 # -----------------------------------------------------------------------------
@@ -43,19 +46,19 @@ _C.DATA.TARGET_QUALITY = 100
 _C.DATA.CACHED = False
 # Maximum amount of RAM dedicated to cache (in GB)
 _C.DATA.CACHE_MEMORY = 16
-# Include RGB channels from LQ image in datapoint?
+# Include RGB channels from LQ image in datapoint ?
 _C.DATA.USE_LQ_RGB = False
-# Include YCbCr planes from LQ image in datapoint?
+# Include YCbCr planes from LQ image in datapoint ?
 _C.DATA.USE_LQ_YCC = False
-# Include DCT coefficients from LQ image in datapoint?
+# Include DCT coefficients from LQ image in datapoint ?
 _C.DATA.USE_LQ_DCT = True
-# Include RGB channels from HQ image in datapoint?
+# Include RGB channels from HQ image in datapoint ?
 _C.DATA.USE_HQ_RGB = True
-# Include YCbCr planes from HQ image in datapoint?
+# Include YCbCr planes from HQ image in datapoint ?
 _C.DATA.USE_HQ_YCC = True
-# Include DCT coefficients from HQ image in datapoint?
+# Include DCT coefficients from HQ image in datapoint ?
 _C.DATA.USE_HQ_DCT = False
-# Include JPEG quantization tables in datapoint?
+# Include JPEG quantization tables in datapoint ?
 _C.DATA.USE_QTABLES = True
 # Normalize RGB ?
 _C.DATA.NORMALIZE_RGB = False
@@ -68,13 +71,11 @@ _C.DATA.NORMALIZE_DCT = True
 _C.DATA.INVERT_QT = False
 # Path to JSON file with DCT coefficients mean and std. Used for normalization.
 _C.DATA.DCT_STATS_FILEPATH = "data/DIV2K+Flickr2K-dct-stats.json"
-# Unused
+# Pin memory on host device ?
 _C.DATA.PIN_MEMORY = False
-# Unused
-_C.DATA.PIN_MEMORY_DEVICE = "mps"
 # Shuffle data in dataloader
 _C.DATA.SHUFFLE = True
-# Unused
+# Number of workers in Torch DataLoader class
 _C.DATA.NUM_WORKERS = 0
 
 
@@ -82,108 +83,53 @@ _C.DATA.NUM_WORKERS = 0
 # Model config
 # -----------------------------------------------------------------------------
 _C.MODEL = CN()
+# Model name. Free text
 _C.MODEL.NAME = ""
+# Class name used to instantiate model. Should match already deined class.
 _C.MODEL.CLASS = ""
+# Keys used to extact model inputs from batch. Passed to `forward()`
 _C.MODEL.INPUTS = ["lq_rgb"]
+# Keys used to extact targets from batch. Passed to loss criterion
 _C.MODEL.TARGETS = ["hq_rgb"]
-# _C.MODEL.RGB_OUTPUT = True
-# If True, Luminance and Chrominance planes will be deartifacted using single shared `SpectralModel`
-_C.MODEL.SHARED_LUMA_CHROMA = True
+# Keyowrd arguments passed to MODEL.CLASS constructor
 _C.MODEL.KWARGS = []
 
-# `BlockNet` embeds the DCT coefficients of each 8x8 block into embedding vector
-# Interaction type between quantization table and DCT coefficients
-# Dimension of embedding vector == MODEL.SPECTRAL.EMBED_DIM
-_C.MODEL.ENCODER_INTERACTION = "none"
-_C.MODEL.DECODER_INTERACTION = "none"
-
-# `SpectralModel`
-_C.MODEL.SPECTRAL = CN()
-# Dimension of input vector to `SpectralModel`
-_C.MODEL.SPECTRAL.INPUT_DIM = 64
-# Number of `SpectralEncoderLayer` layers
-_C.MODEL.SPECTRAL.DEPTH = 4
-# Dimension of embedding vectors - d_model
-_C.MODEL.SPECTRAL.EMBED_DIM = 128
-# Window size used for self-attention in each `SpectralEncoderLayer`
-_C.MODEL.SPECTRAL.WINDOW_SIZES = [7, 7, 7, 7]
-# Number of attention heads in each `SpectralEncoderLayer`
-_C.MODEL.SPECTRAL.NUM_HEADS = [4, 4, 4, 4]
-# Dimension of feedforward network in each `SpectralEncoderLayer`
-_C.MODEL.SPECTRAL.MLP_DIMS = [512, 512, 512, 512]
-# If True, add bias to Q, K, V projection matrices
-_C.MODEL.SPECTRAL.QKV_BIAS = True
-# Dropout rates in feedforward networks of each `SpectralEncoderLayer`
-_C.MODEL.SPECTRAL.DROPOUTS = [0.1, 0.1, 0.1, 0.1]
-# Type of output transform to be applied on `SpectralModel`'s outputs.
-# One of ["identity", "rgb", "ycc"].
-_C.MODEL.SPECTRAL.OUTPUT_TRANSFORM = "ycc"
-
-
-# Chrominance Upscale Net
-# We'll call it Chroma net
-_C.MODEL.CHROMA = CN()
-_C.MODEL.CHROMA.SKIP = False
-_C.MODEL.CHROMA.DEPTHS = [1, 2, 1]
-_C.MODEL.CHROMA.CHANNELS = [32, 64, 32]
-_C.MODEL.CHROMA.CHANNEL_MULTIPLIER = 2
-_C.MODEL.CHROMA.IN_CHANNELS = 3
-_C.MODEL.CHROMA.OUT_CHANNELS = 3
-_C.MODEL.CHROMA.STEM_KERNEL_SIZE = 3
-_C.MODEL.CHROMA.BODY_KERNEL_SIZE = 3
-_C.MODEL.CHROMA.LEAF_KERNEL_SIZE = 3
-
-
-# Quality Assessment Model
-_C.MODEL.GRADE = CN()
-_C.MODEL.GRADE.DEPTHS = [1, 3, 6, 3]
-_C.MODEL.GRADE.DIMS = [32, 64, 128, 256]
-_C.MODEL.GRADE.IN_CHANNELS = 3
-_C.MODEL.GRADE.NUM_OUTPUTS = 1
-_C.MODEL.GRADE.STEM_KERNEL_SIZE = 7
-_C.MODEL.GRADE.STEM_STRIDE = 4
-
-
-# ConvNeXt IR Model
-_C.MODEL.CONVNEXTIR = CN()
-_C.MODEL.CONVNEXTIR.DEPTHS = [1,2,4,1]
-_C.MODEL.CONVNEXTIR.DIMS = [64, 128, 128, 32]
-_C.MODEL.CONVNEXTIR.IN_CHANNELS = 3
-
-# MobileNetIR Model
-_C.MODEL.MOBILENETIR = CN()
-_C.MODEL.MOBILENETIR.IN_CHANNELS = 3
-_C.MODEL.MOBILENETIR.OUT_CHANNELS = 3
-
-# RRDBNet Model
-_C.MODEL.RRDBNET = CN()
-_C.MODEL.RRDBNET.LUMA_BLOCKS = 5
-_C.MODEL.RRDBNET.CHROMA_BLOCKS = 3
-
-# Flare Luma / Chroma Models
+#---    Flare Luma / Chroma Models
 _C.MODEL.FLARE = CN()
 _C.MODEL.FLARE.LUMA = CN()
 _C.MODEL.FLARE.CHROMA = CN()
+# Keyword arguments passed to `FlareNet.__init__()`
 _C.MODEL.FLARE.KWARGS = []
+# Keyword arguments passed to `FlareLuma.__init__()`
 _C.MODEL.FLARE.LUMA.KWARGS = []
+# Keyword arguments passed to `FlareChroma.__init__()`
 _C.MODEL.FLARE.CHROMA.KWARGS = []
+
 
 # -----------------------------------------------------------------------------
 # Training settings
 # -----------------------------------------------------------------------------
 _C.TRAIN = CN()
+# Device used for training
 _C.TRAIN.DEVICE = "mps"
+# Path to checkpoint file, from which to resume training
 _C.TRAIN.RESUME = ""
+# Train batch size
 _C.TRAIN.BATCH_SIZE = 32
 # Update parameters once in every `ACCUMULATE_GRADS` iterations.
+# This is used to simulate larger batch sizes.
 _C.TRAIN.ACCUMULATE_GRADS = 1
+# Start iteration. If training is resumed from checkpoint, this number
+# should be the number of iterations from last train session.
 _C.TRAIN.START_ITERATION = 0
-_C.TRAIN.NUM_ITERATIONS = 50_000
-_C.TRAIN.WARMUP_ITERATIONS = 1000
-_C.TRAIN.WEIGHT_DECAY = 0.05
+# Number of train iterations for current run
+_C.TRAIN.NUM_ITERATIONS = 100_000
+# Number of warmup iterations
+_C.TRAIN.WARMUP_ITERATIONS = 10_000
+# Learning rate after warmup stage
 _C.TRAIN.BASE_LR = 5e-4
+# Initial learning rate.
 _C.TRAIN.WARMUP_LR = 1e-6
-_C.TRAIN.MIN_LR = 5e-6
 # Maximum gradient norm. Gradients with norm > this one, are clipped
 _C.TRAIN.CLIP_GRAD = 5.0
 # How the norm the gradients computed?
@@ -191,28 +137,38 @@ _C.TRAIN.CLIP_GRAD = 5.0
 # were concatenated into a single vector.
 #   * If "param", the norm is computed individually for each parameter.
 _C.TRAIN.CLIP_GRAD_METHOD = "param"
+# Number of iterations after which checkpoint files are saved
 _C.TRAIN.CHECKPOINT_EVERY = 100
+# Parent directory where checkpoint files are saved.
+# The directory of checkpoint files is: CHECKPOINT_DIR/TAG/<iter>
 _C.TRAIN.CHECKPOINT_DIR = "checkpoints/"
-# _C.TRAIN.ACCUMULATION_STEPS = 1
 
-# Optimizer
+
+# -----------------------------------------------------------------------------
+# Optimizer & LR scheduler settings
+# -----------------------------------------------------------------------------
 _C.TRAIN.OPTIMIZER = CN()
+# Optimizer name
 _C.TRAIN.OPTIMIZER.NAME = "adamw"
+# Keyword arguments passed to optimizer `__init__()`
 _C.TRAIN.OPTIMIZER.KWARGS = [ ("betas", (0.9, 0.999)), ("weight_decay", 1e-6) ]
 
-# Learning rate scheduler
 _C.TRAIN.LR_SCHEDULER = CN()
+# Learning rate scheduler name
 _C.TRAIN.LR_SCHEDULER.NAME = "cosine"
-_C.TRAIN.LR_SCHEDULER.KWARGS = [("T_0", 10_000), ("eta_min", 1e-6), ("T_mult", 3)]
-_C.TRAIN.LR_SCHEDULER.WARMUP_PREFIX = True
+# Keyword arguments passed to scheduler's `__init__()`
+_C.TRAIN.LR_SCHEDULER.KWARGS = [("T_0", 99_000), ("eta_min", 1e-6), ("T_mult", 3)]
 
 
 # -----------------------------------------------------------------------------
 # Validation config
 # -----------------------------------------------------------------------------
 _C.VALIDATION = CN()
+# Batch size during validation
 _C.VALIDATION.BATCH_SIZE = 64
+# Run validation procedure after this many iterations
 _C.VALIDATION.EVERY = 500
+# Run validation procedure for JPEG images compressed with these quality factors
 _C.VALIDATION.QUALITIES = [10, 20, 40, 60, 80]
 
 
@@ -220,9 +176,14 @@ _C.VALIDATION.QUALITIES = [10, 20, 40, 60, 80]
 # Test config
 # -----------------------------------------------------------------------------
 _C.TEST = CN()
+# If `True` run test procedure during training for images in DATA.LOCATIONS.TEST dir
 _C.TEST.ENABLED = True
+# Batch size during test
 _C.TEST.BATCH_SIZE = 1
+# Run test procedure for JPEG images compressed with these quality factors
 _C.TEST.QUALITIES = [10, 20, 40, 60, 80]
+# Central crop region size.
+# Each image in DATA.LOCATIONS.TEST is cropped to a square with this size
 _C.TEST.REGION_SIZE = 512
 
 
@@ -230,33 +191,34 @@ _C.TEST.REGION_SIZE = 512
 # Loss config
 # -----------------------------------------------------------------------------
 _C.LOSS = CN()
-# Name of the loss function / criterion used from PyTorch library
-_C.LOSS.CRITERION = "huber"
+# Class name used to instantiate loss criterion
+_C.LOSS.CRITERION = "MSELoss"
 # Keyword arguments passed to criterion constructor
 _C.LOSS.KWARGS = []
-# Multiplier of Luminance (Y) plane loss in total Spectral Loss
-_C.LOSS.LUMA_WEIGHT = 0.5
-# Multiplier of Chrominance (Cb, Cr) planes loss in total Spectral Loss
-_C.LOSS.CHROMA_WEIGHT = 0.25
-# Multiplier of Spectral Loss
-_C.LOSS.ALPHA = 100.0
-# Multiplier of Chroma Loss
-_C.LOSS.BETA = 1.0
+
 
 # -----------------------------------------------------------------------------
 # Logging setting
 # -----------------------------------------------------------------------------
 _C.LOGGING = CN()
+# Log frequency in terms of iteration count
 _C.LOGGING.LOG_EVERY = 100
+# Parent log directory. Log directory for the run is LOGGING.DIR/TAG/
 _C.LOGGING.DIR = "logs/"
+# If `True`, use Wandb cloud service
 _C.LOGGING.WANDB = True
+# If `True`, save plot images
 _C.LOGGING.PLOTS = True
 
+
+
 def default_config():
+    """Returns default config node"""
     return _C.clone()
 
 
 def get_config(filename):
+    """Reads config from file"""
     cfg = default_config()
     cfg.merge_from_file(filename)
     return cfg

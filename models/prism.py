@@ -5,10 +5,6 @@ from .blocks import ResidualDenseBlock4C
 
 
 class PrismBackbone(nn.Module):
-    """
-    Luminance reconstruction net with 4 stages, 3 downsample layers.
-    Downsampling factor = 2 after each stage.
-    """
 
     def __init__(self, in_channels=1, out_channels=64, base_channels=16,
                  blocks_per_stage=1, channel_multiplier=2, use_3d_conv=False):
@@ -71,8 +67,10 @@ class PrismBackbone(nn.Module):
         return out
 
 
-class PrismLumaS4(nn.Module):
-
+class Prism(nn.Module):
+    """
+    Luminance reconstruction in 4 stages.
+    """
     def __init__(self, idct, residual=False, base_channels=16,
                  blocks_per_stage=1, channel_multiplier=2):
         super().__init__()
@@ -82,23 +80,7 @@ class PrismLumaS4(nn.Module):
         self.idct = idct
 
     def forward(self, y, dct_y):
-        # Extract Y plane
         r = self.luma(y)
         dct = r + dct_y if self.residual else r
         out = self.idct(dct, chroma=False)
         return out
-
-
-class PrismNetS4(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-        self.luma = PrismBackbone(1, 64, base_channels=16, use_3d_conv=False)
-        self.chroma = PrismBackbone(1, 128, base_channels=16, use_3d_conv=True)
-        self.idct = 0
-
-    def forward(self, ycc, dctY, dctCb, dctCr):
-        # Extract Y, Cb, Cr planes
-        Y, CbCr = ycc[:, :1, :, :], ycc[:, 1:, :, :]
-        dctY_residium = self.luma(Y)
-        # TODO

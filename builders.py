@@ -11,27 +11,12 @@ import torch.utils.data
 from dataset import (
     DatasetQuantizedJPEG,
 )
-from models.models import (
-    # Transforms
-    ConvertRGBToYcc,
-    ConvertYccToRGB,
+from models.blocks import (
     InverseDCT,
     ToDCTTensor,
     ToQTTensor,
-    # Layers
-    BlockEncoder,
-    BlockDecoder,
-    SpectralNet,
-    SpectralEncoder,
-    SpectralEncoderLayer,
-    SpectralTransformer,
-    SpectralModel,
-    ChromaNet,
-    ConvNeXtBlock,
-    GradeModel
 )
 from models import *
-from utils import CombinedLoss
 
 
 def get_dct_stats(config):
@@ -43,46 +28,6 @@ def get_dct_stats(config):
             "chroma_mean"   : torch.as_tensor(stats["dct_C_mean"]),
             "chroma_std"    : torch.as_tensor(stats["dct_C_std"])
         }
-
-
-def build_block_encoder_decoder(config):
-    encoder = BlockEncoder(64, out_channels=config.MODEL.SPECTRAL.EMBED_DIM,
-                            interaction=config.MODEL.ENCODER_INTERACTION)
-    decoder = BlockDecoder(config.MODEL.SPECTRAL.EMBED_DIM, 64,
-                           interaction=config.MODEL.DECODER_INTERACTION)
-    return encoder, decoder
-
-
-def build_spectral_model(config):
-    num_layers = config.MODEL.SPECTRAL.DEPTH
-    layers = []
-    for i in range(num_layers):
-        encoder_layer = SpectralEncoderLayer(
-            window_size=        config.MODEL.SPECTRAL.WINDOW_SIZES[i],
-            d_model=            config.MODEL.SPECTRAL.EMBED_DIM,
-            num_heads=          config.MODEL.SPECTRAL.NUM_HEADS[i],
-            d_feedforward=      config.MODEL.SPECTRAL.MLP_DIMS[i],
-            dropout=            config.MODEL.SPECTRAL.DROPOUTS[i],
-            add_bias_kqv=       config.MODEL.SPECTRAL.QKV_BIAS
-        )
-        layers.append(encoder_layer)
-
-    transformer = SpectralTransformer(layers)
-    encoder, decoder = build_block_encoder_decoder(config)
-    return SpectralModel(encoder, transformer, decoder)
-
-
-def build_grade_model(config):
-
-    model = GradeModel(
-        in_channels=        config.MODEL.GRADE.IN_CHANNELS,
-        num_outputs=        config.MODEL.GRADE.NUM_OUTPUTS,
-        depths=             config.MODEL.GRADE.DEPTHS,
-        dims=               config.MODEL.GRADE.DIMS,
-        stem_kernel_size=   config.MODEL.GRADE.STEM_KERNEL_SIZE,
-        stem_stride=        config.MODEL.GRADE.STEM_STRIDE
-    )
-    return model
 
 
 def build_idct(config):
@@ -100,106 +45,19 @@ def build_idct(config):
         return InverseDCT()
 
 
-def build_spectral_net(config):
-
-    blocks = []
-    num_blocks = len(config.MODEL.SPECTRAL.DEPTHS)
-
-    in_features = config.MODEL.SPECTRAL.INPUT_DIM
-    for i in range(num_blocks):
-        encoder = SpectralEncoder(
-            in_features=        in_features,
-            num_layers=         config.MODEL.SPECTRAL.DEPTHS[i],
-            window_size=        config.MODEL.SPECTRAL.WINDOW_SIZES[i],
-            d_model=            config.MODEL.SPECTRAL.EMBED_DIMS[i],
-            d_qcoeff=           64,
-            num_heads=          config.MODEL.SPECTRAL.NUM_HEADS[i],
-            d_feedforward=      config.MODEL.SPECTRAL.MLP_DIMS[i],
-            dropout=            config.MODEL.SPECTRAL.DROPOUTS[i],
-            add_bias_kqv=       config.MODEL.SPECTRAL.QKV_BIAS
-        )
-
-        blocks.append(encoder)
-
-        if i < num_blocks - 1:
-            embed_upscale = torch.nn.Conv2d(
-                in_channels=        config.MODEL.SPECTRAL.EMBED_DIMS[i],
-                out_channels=       config.MODEL.SPECTRAL.EMBED_DIMS[i+1],
-                kernel_size=        1,
-                stride=             1,
-                padding=            0,
-                dilation=           1,
-                bias=               False
-
-            )
-            blocks.append(embed_upscale)
-            in_features = config.MODEL.SPECTRAL.EMBED_DIMS[i+1]
-
-    # Initialize Inverse DCT Transform
-    stats = get_dct_stats(config)
-    idct = InverseDCT(
-        luma_mean=      stats["luma_mean"],
-        luma_std=       stats["luma_std"],
-        chroma_mean=    stats["chroma_mean"],
-        chroma_std=     stats["chroma_std"]
-    )
-    # blocks.append(idct)
-
-    return SpectralNet(blocks, output_transform=idct)
-
-
-def build_chroma_net(config):
-
-    depths =    config.MODEL.CHROMA.DEPTHS
-    channels =  config.MODEL.CHROMA.CHANNELS
-
-    num_blocks = len(depths)
-    body = []
-    for i in range(num_blocks):
-        for _ in range(depths[i]):
-            block = ConvNeXtBlock(
-                in_channels=    channels[i],
-                mid_channels=   config.MODEL.CHROMA.CHANNEL_MULTIPLIER * channels[i],
-                kernel_size=    config.MODEL.CHROMA.BODY_KERNEL_SIZE
-            )
-            body.append(block)
-
-    if config.MODEL.RGB_OUTPUT:
-        out_transform = ConvertYccToRGB()
-    else:
-        out_transform = torch.nn.Identity()
-
-    net = ChromaNet(
-        stages=             body,
-        output_transform=   out_transform,
-        in_channels=        config.MODEL.CHROMA.IN_CHANNELS,
-        out_channels=       config.MODEL.CHROMA.OUT_CHANNELS,
-        kernel_size=        config.MODEL.CHROMA.BODY_KERNEL_SIZE,
-        skip=               config.MODEL.CHROMA.SKIP
-    )
-
-    return net
-
-
 def build_model(config):
 
     if config.MODEL.CLASS == "MobileNetIR":
-        model = MobileNetIR(
-            in_channels=        config.MODEL.MOBILENETIR.IN_CHANNELS,
-            out_channels=       config.MODEL.MOBILENETIR.OUT_CHANNELS,
-        )
+        model = MobileNetIR(**dict(config.MODEL.KWARGS))
 
     elif config.MODEL.CLASS == "RRDBNet":
-        model = RRDBNet(
-            luma_blocks=        config.MODEL.RRDBNET.LUMA_BLOCKS,
-            chroma_blocks=      config.MODEL.RRDBNET.CHROMA_BLOCKS
-        )
+        model = RRDBNet(**dict(config.MODEL.KWARGS))
 
-    elif config.MODEL.CLASS == "PrismLumaS4":
+    elif config.MODEL.CLASS == "Prism":
         dct_stats = get_dct_stats(config)
         idct = InverseDCT(**dct_stats)
         kwargs = dict(config.MODEL.KWARGS)
-        model = PrismLumaS4(idct, **kwargs)
+        model = Prism(idct, **kwargs)
 
     elif config.MODEL.CLASS == "FlareLuma":
         dct_stats = get_dct_stats(config)
@@ -207,7 +65,7 @@ def build_model(config):
         kwargs = dict(config.MODEL.FLARE.LUMA.KWARGS)
         model = FlareLuma(idct, **kwargs)
 
-    elif config.MODEL.CLASS == "FlareNet":
+    elif config.MODEL.CLASS == "Flare":
         dct_stats = get_dct_stats(config)
         idct = InverseDCT(**dct_stats)
         # Build Luma submodel
@@ -218,7 +76,7 @@ def build_model(config):
         chroma = FlareChroma(idct, **chroma_kwargs)
         # Build Flare model
         flare_kwargs = dict(config.MODEL.FLARE.KWARGS)
-        model = FlareNet(luma, chroma, **flare_kwargs)
+        model = Flare(luma, chroma, **flare_kwargs)
 
     elif config.MODEL.CLASS == "MobileNetQA":
         if config.MODEL.INPUTS[0] in ("lq_y", "lq_cb", "lq_cr"):
@@ -316,7 +174,6 @@ def build_dataloader(config, kind: str, quality: int = 0):
         num_workers         = config.DATA.NUM_WORKERS,
         collate_fn          = functools.partial(dataset.collate_fn, device=device),
         pin_memory          = config.DATA.PIN_MEMORY,
-        # pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE if config.DATA.PIN_MEMORY else ''
     )
 
     return dataloader
@@ -391,7 +248,7 @@ def build_lr_scheduler(config, optimizer):
     else:
         raise ValueError
 
-    if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
+    if config.TRAIN.WARMUP_ITERATIONS > 0:
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=config.TRAIN.WARMUP_LR / (config.TRAIN.BASE_LR),
