@@ -8,13 +8,15 @@ from .blocks import (
     FiLM,
     InverseDCT,
     ResidualDenseBlock4C,
+    ResidualDenseBlock4DSC
 )
 
 
 class FlareBackbone(nn.Module):
 
     def __init__(self, in_channels, out_channels, base_channels=32,
-                 blocks_per_stage=2, channel_multiplier=2, weight_scale=0.1):
+                 blocks_per_stage=2, channel_multiplier=2, weight_scale=0.1,
+                 depthwise_separable=False):
 
         super().__init__()
 
@@ -26,6 +28,11 @@ class FlareBackbone(nn.Module):
         #     self.stem = nn.Conv2d(in_channels, ch, 7, 1, 3)
         self.stem = nn.Conv2d(in_channels, base_channels, 7, 1, 3)
 
+        if depthwise_separable:
+            block = ResidualDenseBlock4DSC
+        else:
+            block = ResidualDenseBlock4C
+
         # Residual dense stages
         self.stages = nn.ModuleList()
         stage_channels = []
@@ -33,7 +40,7 @@ class FlareBackbone(nn.Module):
             stage_channels.append(ch)
             gc = ch // 2
             stage = nn.Sequential(
-                *[ResidualDenseBlock4C(ch, growth=gc, weight_scale=weight_scale)
+                *[block(ch, growth=gc, weight_scale=weight_scale)
                     for _ in range(blocks_per_stage)]
             )
             self.stages.append(stage)
@@ -86,12 +93,14 @@ class FlareBackbone(nn.Module):
 class FlareLuma(nn.Module):
 
     def __init__(self, idct: InverseDCT, residual=True, base_channels=32,
-                 blocks_per_stage=1, channel_multiplier=2):
+                 blocks_per_stage=1, channel_multiplier=2, weight_scale=0.1,
+                 depthwise_separable=False):
         super().__init__()
         self.residual   = residual
         self.idct       = idct
         self.luma       = FlareBackbone(1, 64, base_channels, blocks_per_stage,
-                                        channel_multiplier)
+                                        channel_multiplier, weight_scale,
+                                        depthwise_separable)
 
     def forward(self, y, dct_y, qt):
         r = self.luma(y, qt)
@@ -103,12 +112,14 @@ class FlareLuma(nn.Module):
 class FlareChroma(nn.Module):
 
     def __init__(self, idct: InverseDCT, residual=False, base_channels=32,
-                 blocks_per_stage=1, channel_multiplier=2):
+                 blocks_per_stage=1, channel_multiplier=2, weight_scale=1.0,
+                 depthwise_separable=False):
         super().__init__()
         self.residual   = residual
         self.idct       = idct
         self.chroma     = FlareBackbone(3, 128, base_channels, blocks_per_stage,
-                                        channel_multiplier, weight_scale=1.0)
+                                        channel_multiplier, weight_scale,
+                                        depthwise_separable)
 
     def forward(self, y, cb, cr, dct_cb, dct_cr, qt_c):
         # Optionally downscale `y` tensor if chroma subsampling != 444
