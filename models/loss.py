@@ -64,8 +64,8 @@ class PerceptualLoss(nn.Module):
 
 class Q1PerceptualLoss:
 
-    def __init__(self, params_path: str, indices=(2,3,5),
-                 weights=(0.3,0.3,0.4), device="cpu"):
+    def __init__(self, params_path: str, indices=(4,),
+                 weights=(0.3, 0.3, 0.4), device="cpu"):
         q1net = Q1Net(in_channels=3)
         state = torch.load(params_path, weights_only=True, map_location="cpu")
         q1net.load_state_dict(state)

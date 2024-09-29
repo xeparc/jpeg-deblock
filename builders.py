@@ -184,6 +184,8 @@ def build_criterion(config):
         criterion = torch.nn.HuberLoss(**kwargs)
     elif config.LOSS.CRITERION == "MSELoss":
         criterion = torch.nn.MSELoss(**kwargs)
+    elif config.LOSS.CRITERION == "CharbonnierLoss":
+        criterion = CharbonnierLoss(**kwargs)
     elif config.LOSS.CRITERION == "MixedQ1MSELoss":
         criterion = MixedQ1MSELoss(**kwargs)
     else:

@@ -75,7 +75,7 @@ class DSConv2d(nn.Module):
         # Initialization
         torch.nn.init.xavier_uniform_(self.dsconv[0].weight)
         torch.nn.init.xavier_uniform_(self.dsconv[2].weight)
-        torch.nn.init.kaiming_uniform_(self.dsconv[1].weight, nonlinearity="leaky_rely", a=0.2)
+        torch.nn.init.kaiming_uniform_(self.dsconv[1].weight, nonlinearity="leaky_relu", a=0.2)
         self.dsconv[1].weight.data *= weight_scale
 
     def forward(self, x):

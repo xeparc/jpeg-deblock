@@ -155,6 +155,15 @@ _C.TRAIN.LR_SCHEDULER.NAME = "cosine"
 # Keyword arguments passed to scheduler's `__init__()`
 _C.TRAIN.LR_SCHEDULER.KWARGS = [("T_0", 99_000), ("eta_min", 1e-6), ("T_mult", 3)]
 
+# -----------------------------------------------------------------------------
+# Loss config
+# -----------------------------------------------------------------------------
+_C.TRAIN.LOSS = CN()
+# Class name used to instantiate loss criterion
+_C.TRAIN.LOSS.CRITERION = "MSELoss"
+# Keyword arguments passed to criterion constructor
+_C.TRAIN.LOSS.KWARGS = []
+
 
 # -----------------------------------------------------------------------------
 # Validation config
@@ -181,16 +190,6 @@ _C.TEST.QUALITIES = [10, 20, 40, 60, 80]
 # Central crop region size.
 # Each image in DATA.LOCATIONS.TEST is cropped to a square with this size
 _C.TEST.REGION_SIZE = 512
-
-
-# -----------------------------------------------------------------------------
-# Loss config
-# -----------------------------------------------------------------------------
-_C.LOSS = CN()
-# Class name used to instantiate loss criterion
-_C.LOSS.CRITERION = "MSELoss"
-# Keyword arguments passed to criterion constructor
-_C.LOSS.KWARGS = []
 
 
 # -----------------------------------------------------------------------------

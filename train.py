@@ -94,7 +94,9 @@ def train(
             else:
                 old_params = None
             optimizer.step()
-            lr_scheduler.step()
+
+        # Update learning rate
+        lr_scheduler.step()
 
         # Log stats
         if current_iter % log_every == 0:
