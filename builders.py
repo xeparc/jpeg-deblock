@@ -1,5 +1,4 @@
 import json
-import functools
 import logging
 import os
 import sys
@@ -172,7 +171,7 @@ def build_dataloader(config, kind: str, quality: int = 0):
         batch_size          = batch_size,
         shuffle             = config.DATA.SHUFFLE,
         num_workers         = config.DATA.NUM_WORKERS,
-        collate_fn          = functools.partial(dataset.collate_fn, device=device),
+        collate_fn          = dataset.collate_fn,
         pin_memory          = config.DATA.PIN_MEMORY,
     )
 

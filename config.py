@@ -60,10 +60,6 @@ _C.DATA.USE_HQ_YCC = True
 _C.DATA.USE_HQ_DCT = False
 # Include JPEG quantization tables in datapoint ?
 _C.DATA.USE_QTABLES = True
-# Normalize RGB ?
-_C.DATA.NORMALIZE_RGB = False
-# Normalize YCbCr ?
-_C.DATA.NORMALIZE_YCC = False
 # Normalize DCT coefficients ?
 _C.DATA.NORMALIZE_DCT = True
 # If True, map [1, 255] quantization table range to [1, 0].
