@@ -96,22 +96,26 @@ def train(
             optimizer.step()
             lr_scheduler.step()
 
-        # Track stats
-        loss_ = accum * loss.detach().item()
-        psnr_ = -10.0 * np.log10(loss_)
-        lr_   = lr_scheduler.get_last_lr()[0]
-        batch_time = time.time() - tic
-        eta   = int(batch_time * (total_iters - current_iter))
-        monitor.add_scalar({"loss": loss_, "lr": lr_, "psnr": psnr_})
-
         # Log stats
         if current_iter % log_every == 0:
+            loss_ = accum * loss.detach().item()
+            if isinstance(criterion, torch.nn.MSELoss):
+                mse_ = loss_
+            else:
+                mse_ = torch.nn.functional.mse_loss(preds, target)
+            psnr_ = -10.0 * np.log10(mse_)
+            lr_   = lr_scheduler.get_last_lr()[0]
+            batch_time = time.time() - tic
+            eta   = int(batch_time * (total_iters - current_iter))
+
+            monitor.add_scalar({"loss": loss_, "lr": lr_, "mse": mse_, "psnr": psnr_})
             monitor.log(
                 logging.INFO,
                 f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
                 f"time: {batch_time:.2f}\t"
                 f"eta: {datetime.timedelta(seconds=eta)}\t"
                 f"loss: {loss_:.4f}\t"
+                f"mse: {mse_:4f}\t"
                 f"psnr: {psnr_:.5f}\t"
                 f"lr: {lr_:.6f}\t"
                 f"memory: {get_alloc_memory(config):.0f}MB"
@@ -150,6 +154,7 @@ def validate_v2(
 
     tic = time.time()
     val_losses = {}
+    val_mse = {}
     device = config.TRAIN.DEVICE
 
     if isinstance(quality, int):
@@ -169,23 +174,35 @@ def validate_v2(
 
             preds = model(**inputs)
             loss = criterion(preds, target)
+            if isinstance(criterion, torch.nn.MSELoss):
+                mse = loss
+            else:
+                mse = torch.nn.functional.mse_loss(preds, target)
             val_losses.setdefault(q, []).append(loss.item())
+            val_mse.setdefault(q, []).append(mse.item())
 
     current_iter = monitor.get_step()
     total_iters = config.TRAIN.NUM_ITERATIONS
 
-    for q, loss_values in val_losses.items():
-        loss_mean = np.mean(loss_values)
+    for q in quality:
+        loss_values = val_losses[q]
+        mse_values  = val_mse[q]
+
+        loss_mean = np.mean(val_losses)
         loss_std  = np.std(loss_values)
-        psnr = -10.0 * np.log10(loss_mean)
+        mse_mean  = np.mean(mse_values)
+        mse_std   = np.std(mse_values)
+        psnr      = -10.0 * np.log10(mse_mean)
+
         monitor.log(
             logging.INFO,
             f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
             f"loss, q={q}: {loss_mean:.4f} ± {loss_std:.4f}\t"
+            f"mse, q={q}: {mse_mean:.4f} ± {mse_std:.4f}\t"
             f"psnr, q={q}: {psnr:.5f}"
         )
         monitor.add_scalar({f"validation/loss-q={q}": loss_mean,
-                            f"validation/confidence-q={q}": loss_std,
+                            f"validation/mse-q={q}": mse_mean,
                             f"validation/psnr-q={q}": psnr})
 
     monitor.log(
