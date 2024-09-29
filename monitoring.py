@@ -89,7 +89,9 @@ class TrainingMonitor:
             diff = new_param.detach() - old[name].detach()
             u = diff.mean().item()
             s = diff.std().item()
-            n  = torch.linalg.norm(diff).item() / (torch.linalg.norm(new_param).item() + 1e-6)
+            # n  = torch.linalg.norm(diff).item() / (torch.linalg.norm(new_param).item() + 1e-6)
+            n = torch.abs(diff).sum() / (torch.abs(new_param).sum() + 1e-6)
+            n = n.item()
             msg = f"\t[{name}]: update = {u} ± {s}, relative update norm = {n}"
             self.logger.log(logging.DEBUG, msg)
             #
