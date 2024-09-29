@@ -179,14 +179,14 @@ def build_dataloader(config, kind: str, quality: int = 0):
 
 
 def build_criterion(config):
-    kwargs = {k:v for k,v in config.LOSS.KWARGS}
-    if config.LOSS.CRITERION == "HuberLoss":
+    kwargs = {k:v for k,v in config.TRAIN.LOSS.KWARGS}
+    if config.TRAIN.LOSS.CRITERION == "HuberLoss":
         criterion = torch.nn.HuberLoss(**kwargs)
-    elif config.LOSS.CRITERION == "MSELoss":
+    elif config.TRAIN.LOSS.CRITERION == "MSELoss":
         criterion = torch.nn.MSELoss(**kwargs)
-    elif config.LOSS.CRITERION == "CharbonnierLoss":
+    elif config.TRAIN.LOSS.CRITERION == "CharbonnierLoss":
         criterion = CharbonnierLoss(**kwargs)
-    elif config.LOSS.CRITERION == "MixedQ1MSELoss":
+    elif config.TRAIN.LOSS.CRITERION == "MixedQ1MSELoss":
         criterion = MixedQ1MSELoss(**kwargs)
     else:
         raise NotImplementedError
@@ -305,6 +305,5 @@ def build_logger(config, name="train"):
     logger.addHandler(debug_handler)
     logger.addHandler(stdout_handler)
     pid = os.getpid()
-    logger.warning("\n\n\t\t=== > STARTING TRAINING === >\n")
-    logger.warning("\t\tProcess PID: ", pid, "\n\n")
+    logger.warning(f"\n\n\t\t=== > STARTING TRAINING, process PID: {pid} === >\n\n")
     return logger

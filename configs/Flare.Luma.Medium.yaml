@@ -45,11 +45,10 @@ TRAIN:
   CLIP_GRAD: 10.0
   CLIP_GRAD_METHOD: "total"
   BASE_LR: 4.0e-4
-  WARMUP_LR: 1.0e-5
+  WARMUP_LR: 5.0e-5
   LR_SCHEDULER:
     NAME: cosine
     KWARGS: [[T_0, 90_000], [eta_min, 1.0e-5], [T_mult, 2]]
-    WARMUP_PREFIX: True
   CHECKPOINT_EVERY: 500
   CHECKPOINT_DIR: checkpoints/
   LOSS:

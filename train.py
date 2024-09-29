@@ -104,7 +104,8 @@ def train(
             if isinstance(criterion, torch.nn.MSELoss):
                 mse_ = loss_
             else:
-                mse_ = torch.nn.functional.mse_loss(preds, target)
+                with torch.no_grad():
+                    mse_ = torch.nn.functional.mse_loss(preds, target).item()
             psnr_ = -10.0 * np.log10(mse_)
             lr_   = lr_scheduler.get_last_lr()[0]
             batch_time = time.time() - tic
@@ -146,7 +147,7 @@ def train(
 
 
 @torch.no_grad()
-def validate_v2(
+def validate(
     config:     CfgNode,
     model:      torch.nn.Module,
     criterion:  Callable,
@@ -190,7 +191,7 @@ def validate_v2(
         loss_values = val_losses[q]
         mse_values  = val_mse[q]
 
-        loss_mean = np.mean(val_losses)
+        loss_mean = np.mean(loss_values)
         loss_std  = np.std(loss_values)
         mse_mean  = np.mean(mse_values)
         mse_std   = np.std(mse_values)
@@ -199,9 +200,9 @@ def validate_v2(
         monitor.log(
             logging.INFO,
             f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
-            f"loss, q={q}: {loss_mean:.4f} ± {loss_std:.4f}\t"
-            f"mse, q={q}: {mse_mean:.4f} ± {mse_std:.4f}\t"
-            f"psnr, q={q}: {psnr:.5f}"
+            f"loss(q={q}): {loss_mean:.4f} ± {loss_std:.4f}\t"
+            f"mse(q={q}): {mse_mean:.4f} ± {mse_std:.4f}\t"
+            f"psnr(q={q}): {psnr:.5f}"
         )
         monitor.add_scalar({f"validation/loss-q={q}": loss_mean,
                             f"validation/mse-q={q}": mse_mean,
@@ -216,7 +217,7 @@ def validate_v2(
 
 
 @torch.no_grad()
-def test_samples_v2(
+def test_samples(
         config:     CfgNode,
         model:      torch.nn.Module,
         quality:    Union[int, List[int]],
@@ -290,10 +291,10 @@ def train_validate_loop(
         train(config, model, train_loader, criterion, optimizer, lr_scheduler,
               monitor, start_iter=i, max_iters=min(max_iters, i+val_every))
         # Validate
-        validate_v2(config, model, criterion, val_qualities, monitor)
+        validate(config, model, criterion, val_qualities, monitor)
         # Test samples
         if config.TEST.ENABLED:
-            test_samples_v2(config, model, test_qualities, monitor)
+            test_samples(config, model, test_qualities, monitor)
         # Plots
         if config.LOGGING.PLOTS:
             monitor.plot_scalars(plots_dir)
