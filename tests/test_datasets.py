@@ -6,20 +6,16 @@ import pytest
 import torch
 import torchvision
 
+import context
 from dataset import DatasetQuantizedJPEG
-from models.models import ToDCTTensor, ToQTTensor
-from jpegutils import (
-    JPEGTransforms,
-    upsample_chrominance,
-    ycc2rgb,
-)
-from models.models import InverseDCT
+from models.transforms import ToDCTTensor, ToQTTensor, InverseDCT
+from jpegutils import JPEGTransforms, upsample_chrominance, ycc2rgb
 
 
-TEST_DATASET_DIR = "data/Live1-Classic5/live1/refimgs/"
+TEST_DATASET_DIR = "data/live1/refimgs/"
 LEN_DATASET = 29
 DCT_STATS_FILEPATH = "data/DIV2K-DCT-coeff-stats.json"
-DATAPOINTS_OUTPUT_DIR = "tests/dataset/"
+DATAPOINTS_OUTPUT_DIR = "data/tests-output/test_dataset/"
 
 os.makedirs(DATAPOINTS_OUTPUT_DIR, exist_ok=True)
 
@@ -45,6 +41,7 @@ class TestQuantizedDataset:
         self.default_kwargs = dict(
             image_dirs = self.images_path,
             patch_size = 64,
+            region_size = -1,
             subsample = 420,
             min_quality = 10,
             max_quality = 80,
@@ -58,7 +55,8 @@ class TestQuantizedDataset:
             use_hq_rgb = True,
             use_hq_ycc = True,
             use_hq_dct = False,
-            use_qt = True
+            use_qt = True,
+            cached=False
         )
         self.disable_use_keys = dict(
             use_lq_rgb  = False,
@@ -132,7 +130,10 @@ class TestQuantizedDataset:
 
         point = dataset[0]
         assert set(point.keys()) == {
-            "filepath", "quality", "hq_y", "lq_y", "hq_cb", "lq_cb", "hq_cr", "lq_cr"}
+            "filepath", "quality",
+            "hq_y", "lq_y", "hq_cb", "hq_ycc",
+            "lq_cb", "hq_cr", "lq_cr", "lq_ycc"
+        }
         assert isinstance(point["hq_y" ], torch.FloatTensor)
         assert isinstance(point["hq_cb"], torch.FloatTensor)
         assert isinstance(point["hq_cr"], torch.FloatTensor)
@@ -183,6 +184,10 @@ class TestQuantizedDataset:
         assert point["qt_y"].dtype == torch.float32
         assert point["qt_c"].dtype == torch.float32
         assert 0 <= point["qt_c"].min() <= point["qt_c"].max() <= 1.0
+        if invert:
+            assert point["qt_y"][0] >= point["qt_y"][-1]
+        else:
+            assert point["qt_y"][0] <= point["qt_y"][-1]
 
 
     def test_save_datapoint(self):
