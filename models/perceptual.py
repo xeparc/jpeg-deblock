@@ -2,7 +2,6 @@ from typing import *
 
 import torch
 import torch.nn as nn
-import torchvision
 from torchvision.ops import Conv2dNormActivation
 
 class PixelwiseFeatures(torch.nn.Module):

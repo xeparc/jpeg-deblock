@@ -87,3 +87,17 @@ class MixedQ1MSELoss:
         mse = nn.functional.mse_loss(x, target)
         perceptual = self.ploss(x, target)
         return self.alpha * mse + (1.0 - self.alpha) * perceptual
+
+
+class CharbonnierLoss:
+
+    def __call__(self, x, target, reduction="mean", eps=1e-3):
+        l = torch.sqrt((x - target) ** 2 + eps)
+        if reduction == "mean":
+            return torch.mean(l)
+        elif reduction == "sum":
+            return torch.sum(l)
+        elif reduction == "none":
+            return l
+        else:
+            raise NotImplementedError("Unknown reduction: " + str(reduction))

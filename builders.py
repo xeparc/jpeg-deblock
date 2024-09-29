@@ -10,7 +10,7 @@ import torch.utils.data
 from dataset import (
     DatasetQuantizedJPEG,
 )
-from models.blocks import (
+from models.transforms import (
     InverseDCT,
     ToDCTTensor,
     ToQTTensor,

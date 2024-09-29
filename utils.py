@@ -7,7 +7,7 @@ import yacs
 from models import *
 
 IMAGE_EXTENSIONS = "jpg jpeg bmp png tif tiff".split()
-_VALID_TYPES = {tuple, list, str, int, float, bool}
+
 
 def is_image(filepath):
     name = os.path.basename(filepath)
@@ -58,36 +58,6 @@ class RunningStats:
         res = self._var / self.count
         return float(res) if res.size == 1 else res
 
-class CombinedLoss:
-
-    def __init__(self, criterion, luma_weight, chroma_weight, alpha, beta):
-        self.criterion = criterion
-        self.alpha = alpha
-        self.beta = beta
-        self.luma_weight = luma_weight
-        self.chroma_weight = chroma_weight
-
-    def __call__(self, predictions: dict, targets: dict):
-        Y_loss =  self.criterion(predictions["Y"], targets["Y"])
-        Cb_loss = self.criterion(predictions["Cb"], targets["Cb"])
-        Cr_loss = self.criterion(predictions["Cr"], targets["Cr"])
-
-        spectral_loss = (self.luma_weight * Y_loss +
-                         self.chroma_weight * Cb_loss +
-                         self.chroma_weight * Cr_loss)
-        chroma_loss = self.criterion(predictions["final"], targets["final"])
-        total_loss = self.alpha * spectral_loss + self.beta * chroma_loss
-
-        return {
-            "Y":        self.luma_weight * Y_loss,
-            "Cb":       self.chroma_weight * Cb_loss,
-            "Cr":       self.chroma_weight * Cr_loss,
-            "spectral": spectral_loss,
-            "chroma":   chroma_loss,
-            "total":    total_loss
-        }
-
-
 
 def load_checkpoint(state, config, monitor):
     monitor.log(logging.INFO, f"=== > Resuming from {config.TRAIN.RESUME}")
@@ -119,18 +89,6 @@ def save_checkpoint(state, config, monitor):
     monitor.log(logging.INFO, f"{savepath} saving......")
     torch.save(state, savepath)
     monitor.log(logging.INFO, f"{savepath} saved !!!")
-
-
-def charbonnier_loss(input, target, reduction="mean", eps=1e-3):
-    l = torch.sqrt((input - target) ** 2 + eps)
-    if reduction == "mean":
-        return torch.mean(l)
-    elif reduction == "sum":
-        return torch.sum(l)
-    elif reduction == "none":
-        return l
-    else:
-        raise ValueError
 
 
 def yacs_to_dict(cfg_node):

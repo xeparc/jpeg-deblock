@@ -3,13 +3,8 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms.functional
 
-from .blocks import (
-    ConvertYccToRGB,
-    FiLM,
-    InverseDCT,
-    ResidualDenseBlock4C,
-    ResidualDenseBlock4DSC
-)
+from .blocks import FiLM, ResidualDenseBlock4C, ResidualDenseBlock4DSC
+from .transforms import ConvertYccToRGB, InverseDCT
 
 
 class FlareBackbone(nn.Module):
