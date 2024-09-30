@@ -308,22 +308,23 @@ def main(cfg: CfgNode):
     device = torch.device(cfg.TRAIN.DEVICE)
 
     # Init logger
-    logger          = build_logger(cfg)
-    logger.log(logging.INFO, "Logger initialized!")
+    logger = build_logger(cfg)
+    logger.log(logging.INFO, "Logger initialized...")
 
     # Init WANDB (is config flag for it is on)
     if cfg.LOGGING.WANDB:
         wandb.init(project=cfg.TAG, config=yacs_to_dict(cfg))
 
     # Init monitor
-    monitor         = TrainingMonitor(logger, cfg.LOGGING.WANDB)
+    monitor = TrainingMonitor(logger, cfg.LOGGING.WANDB)
 
     # Init dataloaders
-    train_loader    = build_dataloader(cfg, "train")
-    logger.log(logging.INFO, "Train dataloader initialized!")
+    train_loader = build_dataloader(cfg, "train")
+    logger.log(logging.INFO, "Train dataloader initialized...")
 
     # Init models
-    model           = build_model(cfg).to(device)
+    model = build_model(cfg).to(device)
+    logger.log(logging.INFO, "Model initialized...")
     if cfg.LOGGING.WANDB:
         wandb.watch(model, log="all", log_freq=100, log_graph=False)
 
@@ -331,8 +332,9 @@ def main(cfg: CfgNode):
     criterion = build_criterion(cfg)
 
     # Init optimizer & scheduler
-    optim           = build_optimizer(cfg, model.parameters())
-    lr_scheduler    = build_lr_scheduler(cfg, optim)
+    optim        = build_optimizer(cfg, model.parameters())
+    lr_scheduler = build_lr_scheduler(cfg, optim)
+    logger.log(logging.INFO, "Optimizer & LR Scheduler initialized...")
 
     # Check if checkpoint directory already exists. It shouldn't !
     if cfg.TRAIN.CHECKPOINT_EVERY > 0:
@@ -353,6 +355,7 @@ def main(cfg: CfgNode):
         lr_scheduler = state["lr_scheduler"]
 
     # Jump to training loop
+    logger.log(logging.INFO, "Entering train loop...")
     train_validate_loop(
         config=             cfg,
         model=              model,
@@ -367,7 +370,14 @@ def main(cfg: CfgNode):
     modelpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "model.pth")
     optimpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "optimizer.pth")
     torch.save(model.state_dict(), modelpath)
+    logger.log(logging.INFO, f"Saved model -> \"{modelpath}\"")
     torch.save(optim.state_dict(), optimpath)
+    logger.log(logging.INFO, f"Saved optimizer -> \"{optimpath}\"")
+
+    # Save monitor
+    monitorpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "monitor.pickle")
+    monitor.save_state(monitorpath)
+    logger.log(logging.INFO, f"Saved monitor -> \"{monitorpath}\"")
 
     # Exit wandb
     if cfg.LOGGING.WANDB:

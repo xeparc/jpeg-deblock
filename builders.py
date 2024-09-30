@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import subprocess
 import sys
 
 import torch
@@ -273,7 +274,7 @@ def build_logger(config, name="train"):
     # Create formatter
     info_fmt = "[%(asctime)s]: %(levelname)s %(message)s"
     debug_fmt = "[%(asctime)s] (%(filename)s): %(levelname)s %(message)s"
-    warning_fmt = "[%(asctime)s]: %(message)s"
+    stdout_fmt = "[%(asctime)s]: %(message)s"
     datefmt = '%Y-%m-%d %H:%M:%S'
 
     # Create file handlers
@@ -299,11 +300,22 @@ def build_logger(config, name="train"):
     #   - Create console handler
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
-    stdout_handler.setFormatter(logging.Formatter(warning_fmt, datefmt))
+    stdout_handler.setFormatter(logging.Formatter(stdout_fmt, datefmt))
 
     logger.addHandler(info_handler)
     logger.addHandler(debug_handler)
     logger.addHandler(stdout_handler)
     pid = os.getpid()
-    logger.warning(f"\n\n\t\t=== > STARTING TRAINING, process PID: {pid} === >\n\n")
+    logger.info(f"\n\n\t\t=== > STARTING TRAINING, process PID: {pid} === >\n\n")
+
+    # Log git commit hash and branch
+    try:
+        git_branch = subprocess.check_output(
+            ["git", "describe", "--all"]).decode("ascii").strip()
+        git_commit = subprocess.check_output(
+            ["git", "describe", "--always", "--abbrev=32"]).decode("ascii").strip()
+        logger.info(f"\tOn branch: {git_branch}")
+        logger.info(f"\tCommit hash: {git_commit}")
+    except subprocess.CalledProcessError:
+        pass
     return logger

@@ -60,7 +60,7 @@ class RunningStats:
 
 
 def load_checkpoint(state, config, monitor):
-    monitor.log(logging.INFO, f"=== > Resuming from {config.TRAIN.RESUME}")
+    monitor.log(logging.INFO, f"Loading checkpoint \"{config.TRAIN.RESUME}\"...")
     checkpoint = torch.load(config.TRAIN.RESUME, map_location='cpu')
     iter = checkpoint["iteration"]
 
@@ -71,7 +71,7 @@ def load_checkpoint(state, config, monitor):
             state[k].load_state_dict(checkpoint[k])
         else:
             state[k] = checkpoint[k]
-        monitor.log(logging.INFO, f"=== > loaded successfully \"{k}\" (iter {iter})")
+        monitor.log(logging.INFO, f"\tLoaded successfully \"{k}\" (iter {iter})")
 
     config.defrost()
     config.TRAIN.START_ITERATION = checkpoint["iteration"] + 1
@@ -86,9 +86,9 @@ def save_checkpoint(state, config, monitor):
         f'checkpoint_{i}.pth'
     )
     os.makedirs(os.path.dirname(savepath), exist_ok=True)
-    monitor.log(logging.INFO, f"{savepath} saving......")
+    monitor.log(logging.INFO, f"Saving checkpoint \"{savepath}\"...")
     torch.save(state, savepath)
-    monitor.log(logging.INFO, f"{savepath} saved !!!")
+    monitor.log(logging.INFO, f"Checkpoint saved.")
 
 
 def yacs_to_dict(cfg_node):
