@@ -38,7 +38,8 @@ MODEL:
       KWARGS: [[residual, True], [base_channels, 32], [blocks_per_stage, 2], [channel_multiplier, 2], [weight_scale, 0.1], [depthwise_separable, True]]
 TRAIN:
   DEVICE: "cuda"
-  BATCH_SIZE: 64
+  BATCH_SIZE: 32
+  ACCUMULATE_GRADS: 4
   NUM_ITERATIONS: 100_000
   WARMUP_ITERATIONS: 10_000
   CLIP_GRAD: 10.0
@@ -53,7 +54,7 @@ TRAIN:
   LOSS:
     CRITERION: CharbonnierLoss
 VALIDATION:
-  BATCH_SIZE: 64
+  BATCH_SIZE: 32
   EVERY: 1000
   QUALITIES: [10, 20, 40, 60]
 TEST:
