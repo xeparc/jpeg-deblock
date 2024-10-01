@@ -110,6 +110,7 @@ def build_dataloader(config, kind: str, quality: int = 0):
         region_size =   config.DATA.REGION_SIZE
         patch_size =    config.DATA.PATCH_SIZE
         cached =        config.DATA.CACHED
+        shuffle =       config.DATA.SHUFFLE
     elif kind == "val":
         image_dirs =    config.DATA.LOCATIONS.VAL
         num_patches =   1
@@ -117,6 +118,7 @@ def build_dataloader(config, kind: str, quality: int = 0):
         region_size =   config.DATA.PATCH_SIZE
         patch_size =    config.DATA.PATCH_SIZE
         cached =        False
+        shuffle =       False
     elif kind == "test":
         image_dirs =    config.DATA.LOCATIONS.TEST
         num_patches =   1
@@ -124,6 +126,7 @@ def build_dataloader(config, kind: str, quality: int = 0):
         region_size =   config.TEST.REGION_SIZE
         patch_size =    config.TEST.REGION_SIZE
         cached =        False
+        shuffle =       False
 
     # Optionally, override min/max quaility in config.DATA.
     # This is used to evaluate models on test samples.
@@ -165,17 +168,14 @@ def build_dataloader(config, kind: str, quality: int = 0):
         cache_memory=       config.DATA.CACHE_MEMORY
     )
 
-    device = torch.device(config.TRAIN.DEVICE)
-
     dataloader = torch.utils.data.DataLoader(
         dataset             = dataset,
         batch_size          = batch_size,
-        shuffle             = config.DATA.SHUFFLE,
+        shuffle             = shuffle,
         num_workers         = config.DATA.NUM_WORKERS,
         collate_fn          = dataset.collate_fn,
         pin_memory          = config.DATA.PIN_MEMORY,
     )
-
     return dataloader
 
 
