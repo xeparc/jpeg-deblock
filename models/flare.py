@@ -51,9 +51,9 @@ class FlareBackbone(nn.Module):
 
         # Downscaling layers
         self.downscales = nn.ModuleList([
-            nn.Conv2d(stage_channels[0], stage_channels[1], 2, 2),
-            nn.Conv2d(stage_channels[1], stage_channels[2], 2, 2),
-            nn.Conv2d(stage_channels[2], stage_channels[3], 2, 2),
+            nn.Conv2d(stage_channels[0], stage_channels[1], 2, 2, bias=False),
+            nn.Conv2d(stage_channels[1], stage_channels[2], 2, 2, bias=False),
+            nn.Conv2d(stage_channels[2], stage_channels[3], 2, 2, bias=False),
         ])
 
         # Head
