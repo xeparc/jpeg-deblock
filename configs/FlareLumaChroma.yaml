@@ -1,6 +1,6 @@
-TAG: FlareLumaChroma-run1
+TAG: FlareLumaChroma-run3
 SEED: 7
-COMMENT: "FiLM applied on all stages"
+COMMENT: "FiLM applied on all stages + lr=1e-2 + HQ luma"
 
 DATA:
   NAME: "DIV2K+Flickr2K"
@@ -24,8 +24,6 @@ DATA:
   USE_HQ_YCC: True
   USE_HQ_DCT: False
   USE_QTABLES: True
-  NORMALIZE_RGB: False
-  NORMALIZE_YCC: False
   NORMALIZE_DCT: True
   INVERT_QT: True
   DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
@@ -36,7 +34,7 @@ MODEL:
   NAME: FlareLumaChroma
   CLASS: FlareNet
   FLARE:
-    KWARGS: [[rgb_output, True]]
+    KWARGS: [[rgb_output, True], [freeze_luma, True], [use_hq_luma, True]]
     LUMA:
       KWARGS: [[residual, True], [base_channels, 32], [blocks_per_stage, 1], [channel_multiplier, 2]]
     CHROMA:
@@ -46,10 +44,10 @@ TRAIN:
   BATCH_SIZE: 64
   NUM_ITERATIONS: 100_000
   WARMUP_ITERATIONS: 1000
-  CLIP_GRAD: 10.0
+  CLIP_GRAD: 100.0
   CLIP_GRAD_METHOD: "total"
-  BASE_LR: 2.0e-4
-  WARMUP_LR: 1.0e-5
+  BASE_LR: 1.0e-2
+  WARMUP_LR: 1.0e-3
   LR_SCHEDULER:
     NAME: cosine
     KWARGS: [[T_0, 99_000], [eta_min, 1.0e-5], [T_mult, 2]]
@@ -66,6 +64,6 @@ TEST:
   REGION_SIZE: 512
 LOGGING:
   DIR: /Volumes/SiliconPower/jpeg-deblock/logs
-  LOG_EVERY: 50
+  LOG_EVERY: 10
   WANDB: False
   PLOTS: True

@@ -25,7 +25,7 @@ DATA:
   USE_HQ_DCT: False
   USE_QTABLES: True
   NORMALIZE_DCT: True
-  INVERT_QT: True
+  INVERT_QT: False
   DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
   PIN_MEMORY: True
   SHUFFLE: True
@@ -50,7 +50,7 @@ TRAIN:
     NAME: cosine
     KWARGS: [[T_0, 90_000], [eta_min, 1.0e-5], [T_mult, 2]]
   CHECKPOINT_EVERY: 500
-  CHECKPOINT_DIR: checkpoints/
+  CHECKPOINT_DIR: /Volumes/SiliconPower/jpeg-deblock/checkpoints/
   LOSS:
     CRITERION: CharbonnierLoss
 VALIDATION:
@@ -63,7 +63,7 @@ TEST:
   QUALITIES: [10, 20, 40, 60, 80]
   REGION_SIZE: 512
 LOGGING:
-  DIR: logs/
+  DIR: /Volumes/SiliconPower/jpeg-deblock/logs/
   LOG_EVERY: 100
   WANDB: False
   PLOTS: True

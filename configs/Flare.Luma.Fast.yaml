@@ -25,7 +25,7 @@ DATA:
   USE_HQ_DCT: False
   USE_QTABLES: True
   NORMALIZE_DCT: True
-  INVERT_QT: True
+  INVERT_QT: False
   DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
   PIN_MEMORY: True
   SHUFFLE: True
@@ -35,11 +35,11 @@ MODEL:
   CLASS: FlareLuma
   FLARE:
     LUMA:
-      KWARGS: [[residual, True], [base_channels, 16], [blocks_per_stage, 1], [channel_multiplier, 2], [weight_scale, 0.1], [depthwise_separable, True]]
+      KWARGS: [[residual, True], [base_channels, 16], [blocks_per_stage, 1], [channel_multiplier, 2], [weight_scale, 1.0], [depthwise_separable, True]]
 TRAIN:
   DEVICE: "cuda"
-  BATCH_SIZE: 32
-  ACCUMULATE_GRADS: 4
+  BATCH_SIZE: 64
+  ACCUMULATE_GRADS: 2
   NUM_ITERATIONS: 100_000
   WARMUP_ITERATIONS: 10_000
   CLIP_GRAD: 10.0

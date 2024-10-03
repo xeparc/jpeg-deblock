@@ -25,7 +25,7 @@ DATA:
   USE_HQ_DCT: False
   USE_QTABLES: True
   NORMALIZE_DCT: True
-  INVERT_QT: True
+  INVERT_QT: False
   DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
   PIN_MEMORY: True
   SHUFFLE: True
