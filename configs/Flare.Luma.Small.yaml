@@ -1,6 +1,6 @@
-TAG: FlareLuma.Small-run1
+TAG: FlareLuma.Small-final
 SEED: 7
-COMMENT: "Flare.Luma - 1.4M parameters, depthwise separable convolutions, Charbonnier loss."
+COMMENT: "Flare.Luma - 4M parameters, Charbonnier loss."
 
 DATA:
   NAME: "DIV2K+Flickr2K"
@@ -35,28 +35,28 @@ MODEL:
   CLASS: FlareLuma
   FLARE:
     LUMA:
-      KWARGS: [[residual, True], [base_channels, 32], [blocks_per_stage, 2], [channel_multiplier, 2], [weight_scale, 0.1], [depthwise_separable, True]]
+      KWARGS: [[residual, True], [base_channels, 32], [blocks_per_stage, 1], [channel_multiplier, 2], [weight_scale, 1.0], [depthwise_separable, False]]
 TRAIN:
   DEVICE: "cuda"
-  BATCH_SIZE: 32
-  ACCUMULATE_GRADS: 4
+  BATCH_SIZE: 64
+  ACCUMULATE_GRADS: 2
   NUM_ITERATIONS: 100_000
-  WARMUP_ITERATIONS: 10_000
+  WARMUP_ITERATIONS: 20_000
   CLIP_GRAD: 10.0
   CLIP_GRAD_METHOD: "total"
   BASE_LR: 4.0e-4
   WARMUP_LR: 5.0e-5
   LR_SCHEDULER:
     NAME: cosine
-    KWARGS: [[T_0, 90_000], [eta_min, 1.0e-5], [T_mult, 2]]
-  CHECKPOINT_EVERY: 500
+    KWARGS: [[T_0, 80_000], [eta_min, 5.0e-5], [T_mult, 2]]
+  CHECKPOINT_EVERY: 10_000
   CHECKPOINT_DIR: checkpoints/
   LOSS:
     CRITERION: CharbonnierLoss
 VALIDATION:
-  BATCH_SIZE: 32
+  BATCH_SIZE: 64
   EVERY: 1000
-  QUALITIES: [10, 20, 40, 60]
+  QUALITIES: [10, 20, 40, 60, 80]
 TEST:
   ENABLED: True
   BATCH_SIZE: 1
