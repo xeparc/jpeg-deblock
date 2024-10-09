@@ -2,8 +2,9 @@
 data/
 logs/
 checkpoints/
-models/
+configs/
 literature/
+wandb/
 *.pdf
 *.jpg
 *.png

@@ -1,7 +1,8 @@
 import json
-import functools
 import logging
 import os
+import subprocess
+import sys
 
 import torch
 import torch.utils
@@ -9,18 +10,13 @@ import torch.utils.data
 
 from dataset import (
     DatasetQuantizedJPEG,
-    ToDCTTensor,
-    ToQTTensor
 )
-from models import (
-    SpectralNet,
-    SpectralEncoder,
-    ChromaNet,
-    ConvNeXtBlock,
+from models.transforms import (
     InverseDCT,
-    ConvertYccToRGB
+    ToDCTTensor,
+    ToQTTensor,
 )
-from utils import CombinedLoss
+from models import *
 
 
 def get_dct_stats(config):
@@ -34,102 +30,112 @@ def get_dct_stats(config):
         }
 
 
-def build_spectral_net(config):
-
-    blocks = []
-    num_blocks = len(config.MODEL.SPECTRAL.DEPTHS)
-
-    in_features = config.MODEL.SPECTRAL.INPUT_DIM
-    for i in range(num_blocks):
-        encoder = SpectralEncoder(
-            in_features=        in_features,
-            num_layers=         config.MODEL.SPECTRAL.DEPTHS[i],
-            window_size=        config.MODEL.SPECTRAL.WINDOW_SIZES[i],
-            d_model=            config.MODEL.SPECTRAL.EMBED_DIMS[i],
-            d_qcoeff=           64,
-            num_heads=          config.MODEL.SPECTRAL.NUM_HEADS[i],
-            d_feedforward=      config.MODEL.SPECTRAL.MLP_DIMS[i],
-            dropout=            config.MODEL.SPECTRAL.DROPOUTS[i],
-            add_bias_kqv=       config.MODEL.SPECTRAL.QKV_BIAS
-        )
-
-        blocks.append(encoder)
-
-        if i < num_blocks - 1:
-            embed_upscale = torch.nn.Conv2d(
-                in_channels=        config.MODEL.SPECTRAL.EMBED_DIMS[i],
-                out_channels=       config.MODEL.SPECTRAL.EMBED_DIMS[i+1],
-                kernel_size=        1,
-                stride=             1,
-                padding=            0,
-                dilation=           1,
-                bias=               False
-
+def build_idct(config):
+    """Builds Inverse DCT transform Module."""
+    if config.DATA.NORMALIZE_DCT:
+        with open(config.DATA.DCT_STATS_FILEPATH, mode="rt") as f:
+            stats = json.load(f)
+            return InverseDCT(
+                luma_mean     = torch.as_tensor(stats["dct_Y_mean"]),
+                luma_std      = torch.as_tensor(stats["dct_Y_std"]),
+                chroma_mean   = torch.as_tensor(stats["dct_C_mean"]),
+                chroma_std    = torch.as_tensor(stats["dct_C_std"])
             )
-            blocks.append(embed_upscale)
-            in_features = config.MODEL.SPECTRAL.EMBED_DIMS[i+1]
-
-    # Initialize Inverse DCT Transform
-    stats = get_dct_stats(config)
-    idct = InverseDCT(
-        luma_mean=      stats["luma_mean"],
-        luma_std=       stats["luma_std"],
-        chroma_mean=    stats["chroma_mean"],
-        chroma_std=     stats["chroma_std"]
-    )
-    # blocks.append(idct)
-
-    return SpectralNet(blocks, output_transform=idct)
-
-
-def build_chroma_net(config):
-
-    depths =    config.MODEL.CHROMA.DEPTHS
-    channels =  config.MODEL.CHROMA.CHANNELS
-
-    num_blocks = len(depths)
-    body = []
-    for i in range(num_blocks):
-        for _ in range(depths[i]):
-            block = ConvNeXtBlock(
-                in_channels=    channels[i],
-                mid_channels=   config.MODEL.CHROMA.CHANNEL_MULTIPLIER * channels[i],
-                kernel_size=    config.MODEL.CHROMA.BODY_KERNEL_SIZE
-            )
-            body.append(block)
-
-    if config.MODEL.RGB_OUTPUT:
-        out_transform = ConvertYccToRGB()
     else:
-        out_transform = torch.nn.Identity()
-
-    net = ChromaNet(
-        stages=             body,
-        output_transform=   out_transform,
-        in_channels=        config.MODEL.CHROMA.IN_CHANNELS,
-        out_channels=       config.MODEL.CHROMA.OUT_CHANNELS,
-        kernel_size=        config.MODEL.CHROMA.BODY_KERNEL_SIZE,
-        skip=               config.MODEL.CHROMA.SKIP
-    )
-
-    return net
+        return InverseDCT()
 
 
-def build_dataloader(config, kind: str):
+def build_model(config):
+
+    if config.MODEL.CLASS == "MobileNetIR":
+        model = MobileNetIR(**dict(config.MODEL.KWARGS))
+
+    elif config.MODEL.CLASS == "RRDBNet":
+        model = RRDBNet(**dict(config.MODEL.KWARGS))
+
+    elif config.MODEL.CLASS == "Prism":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        kwargs = dict(config.MODEL.KWARGS)
+        model = Prism(idct, **kwargs)
+
+    elif config.MODEL.CLASS == "FlareLuma":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        kwargs = dict(config.MODEL.FLARE.LUMA.KWARGS)
+        model = FlareLuma(idct, **kwargs)
+
+    elif config.MODEL.CLASS == "Flare":
+        dct_stats = get_dct_stats(config)
+        idct = InverseDCT(**dct_stats)
+        # Build Luma submodel
+        luma_kwargs = dict(config.MODEL.FLARE.LUMA.KWARGS)
+        luma = FlareLuma(idct, **luma_kwargs)
+        # Build Chroma submodel
+        chroma_kwargs = dict(config.MODEL.FLARE.CHROMA.KWARGS)
+        chroma = FlareChroma(idct, **chroma_kwargs)
+        # Build Flare model
+        flare_kwargs = dict(config.MODEL.FLARE.KWARGS)
+        model = Flare(luma, chroma, **flare_kwargs)
+
+    elif config.MODEL.CLASS == "MobileNetQA":
+        if config.MODEL.INPUTS[0] in ("lq_y", "lq_cb", "lq_cr"):
+            model = MobileNetQA(in_channels=1)
+        elif config.MODEL.INPUTS[0] in ("lq_ycc", "lq_rgb"):
+            model = MobileNetQA(in_channels=3)
+        else:
+            raise NotImplementedError("Unsupported inputs: " + str(config.MODEL.INPUTS))
+
+    elif config.MODEL.CLASS == "Q1Net":
+        if config.MODEL.INPUTS[0] in ("lq_y", "lq_cb", "lq_cr"):
+            in_channels = 1
+        elif config.MODEL.INPUTS[0] in ("lq_ycc", "lq_rgb"):
+            in_channels = 3
+        else:
+            raise NotImplementedError("Unsupported inputs: " + str(config.MODEL.INPUTS))
+        model = Q1Net(in_channels)
+    else:
+        raise NotImplementedError
+
+    return model
+
+
+def build_dataloader(config, kind: str, quality: int = 0):
     assert kind in ("train", "val", "test")
 
     if kind == "train":
-        image_dirs = config.DATA.LOCATIONS.TRAIN
-        num_patches = config.DATA.NUM_PATCHES
-        batch_size = config.TRAIN.BATCH_SIZE // num_patches
+        image_dirs =    config.DATA.LOCATIONS.TRAIN
+        num_patches =   config.DATA.NUM_PATCHES
+        batch_size =    config.TRAIN.BATCH_SIZE // num_patches
+        region_size =   config.DATA.REGION_SIZE
+        patch_size =    config.DATA.PATCH_SIZE
+        cached =        config.DATA.CACHED
+        shuffle =       config.DATA.SHUFFLE
     elif kind == "val":
-        image_dirs = config.DATA.LOCATIONS.VAL
-        num_patches = 1
-        batch_size = config.VALIDATION.BATCH_SIZE
+        image_dirs =    config.DATA.LOCATIONS.VAL
+        num_patches =   1
+        batch_size =    config.VALIDATION.BATCH_SIZE
+        region_size =   config.DATA.PATCH_SIZE
+        patch_size =    config.DATA.PATCH_SIZE
+        cached =        False
+        shuffle =       False
     elif kind == "test":
-        image_dirs = config.DATA.LOCATIONS.TEST
-        num_patches = 1
-        batch_size = config.TEST.BATCH_SIZE
+        image_dirs =    config.DATA.LOCATIONS.TEST
+        num_patches =   1
+        batch_size =    config.TEST.BATCH_SIZE
+        region_size =   config.TEST.REGION_SIZE
+        patch_size =    config.TEST.REGION_SIZE
+        cached =        False
+        shuffle =       False
+
+    # Optionally, override min/max quaility in config.DATA.
+    # This is used to evaluate models on test samples.
+    if quality > 0:
+        min_quality = quality
+        max_quality = quality + 1
+    else:
+        min_quality = config.DATA.MIN_QUALITY
+        max_quality = config.DATA.MAX_QUALITY
 
     if config.DATA.NORMALIZE_DCT:
         coeffs = get_dct_stats(config)
@@ -141,10 +147,11 @@ def build_dataloader(config, kind: str):
 
     dataset = DatasetQuantizedJPEG(
         image_dirs=         image_dirs,
-        patch_size=         config.DATA.PATCH_SIZE,
+        region_size=        region_size,
+        patch_size=         patch_size,
         num_patches=        num_patches,
-        min_quality=        config.DATA.MIN_QUALITY,
-        max_quality=        config.DATA.MAX_QUALITY,
+        min_quality=        min_quality,
+        max_quality=        max_quality,
         target_quality=     config.DATA.TARGET_QUALITY,
         subsample=          config.DATA.SUBSAMPLE,
         transform_dct=      transform_dct,
@@ -156,58 +163,69 @@ def build_dataloader(config, kind: str):
         use_hq_ycc=         config.DATA.USE_HQ_YCC,
         use_hq_dct=         config.DATA.USE_HQ_DCT,
         use_qt=             config.DATA.USE_QTABLES,
-        seed=               config.SEED
+        seed=               config.SEED,
+        cached=             cached,
+        cache_memory=       config.DATA.CACHE_MEMORY
     )
-
-    device = torch.device(config.TRAIN.DEVICE)
 
     dataloader = torch.utils.data.DataLoader(
         dataset             = dataset,
         batch_size          = batch_size,
-        shuffle             = config.DATA.SHUFFLE,
+        shuffle             = shuffle,
         num_workers         = config.DATA.NUM_WORKERS,
-        collate_fn          = functools.partial(dataset.collate_fn, device=device),
+        collate_fn          = dataset.collate_fn,
         pin_memory          = config.DATA.PIN_MEMORY,
-        pin_memory_device   = config.DATA.PIN_MEMORY_DEVICE if config.DATA.PIN_MEMORY else ''
     )
-
     return dataloader
 
 
 def build_criterion(config):
-    kwargs = {k:v for k,v in config.LOSS.CRITERION_KWARGS}
-    if config.LOSS.CRITERION == "huber":
+    kwargs = {k:v for k,v in config.TRAIN.LOSS.KWARGS}
+    if config.TRAIN.LOSS.CRITERION == "HuberLoss":
         criterion = torch.nn.HuberLoss(**kwargs)
-    elif config.LOSS.CRITERION == "mse":
+    elif config.TRAIN.LOSS.CRITERION == "MSELoss":
         criterion = torch.nn.MSELoss(**kwargs)
+    elif config.TRAIN.LOSS.CRITERION == "CharbonnierLoss":
+        criterion = CharbonnierLoss(**kwargs)
+    elif config.TRAIN.LOSS.CRITERION == "MixedQ1MSELoss":
+        criterion = MixedQ1MSELoss(**kwargs)
     else:
-        raise ValueError
+        raise NotImplementedError
 
-    return CombinedLoss(
-        criterion=      criterion,
-        luma_weight=    config.LOSS.LUMA_WEIGHT,
-        chroma_weight=  config.LOSS.CHROMA_WEIGHT,
-        alpha=          config.LOSS.ALPHA,
-        beta=           config.LOSS.BETA
-    )
+    return criterion
 
 
-def build_optimizer(config, spectral_params, chroma_params):
+def build_optimizer(config, *params_list):
 
     name = config.TRAIN.OPTIMIZER.NAME
     kwargs = {k:v for k,v in config.TRAIN.OPTIMIZER.KWARGS}
 
-    # if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
-    #     lr = config.TRAIN.WARMUP_LR
-    # else:
-    #     lr = config.TRAIN.BASE_LR
+    # Collect parameters with `require_grad=True`
+    trainable_params = []
+    for param in params_list:
+        trainable_params.extend(p for p in param if p.requires_grad)
 
     if name == "adamw":
         optim = torch.optim.AdamW(
-            params=[{"params": spectral_params, "params": chroma_params}],
+            params=trainable_params,
             lr=config.TRAIN.BASE_LR,
             **kwargs
         )
+    elif name == "sgd":
+        optim = torch.optim.SGD(
+            params=trainable_params,
+            lr=config.TRAIN.BASE_LR,
+            **kwargs
+        )
+    elif name == "rmsprop":
+        optim = torch.optim.RMSprop(
+            params=trainable_params,
+            lr=config.TRAIN.BASE_LR,
+            **kwargs
+        )
+    else:
+        raise NotImplementedError
+
     return optim
 
 
@@ -232,7 +250,7 @@ def build_lr_scheduler(config, optimizer):
     else:
         raise ValueError
 
-    if config.TRAIN.LR_SCHEDULER.WARMUP_PREFIX:
+    if config.TRAIN.WARMUP_ITERATIONS > 0:
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=config.TRAIN.WARMUP_LR / (config.TRAIN.BASE_LR),
@@ -253,21 +271,51 @@ def build_logger(config, name="train"):
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    # create formatter
-    fmt = '[%(asctime)s %(name)s] (%(filename)s %(lineno)d): %(levelname)s %(message)s'
+    # Create formatter
+    info_fmt = "[%(asctime)s]: %(levelname)s %(message)s"
+    debug_fmt = "[%(asctime)s] (%(filename)s): %(levelname)s %(message)s"
+    stdout_fmt = "[%(asctime)s]: %(message)s"
+    datefmt = '%Y-%m-%d %H:%M:%S'
 
-    # create file handlers
-    savepath = os.path.join(config.LOGGING.DIR, config.TAG, "log.txt")
-    fresh = False
-    if not os.path.exists(savepath):
-        os.makedirs(os.path.dirname(savepath), exist_ok=True)
-        open(savepath, mode='w').close()
-        fresh = True
-    file_handler = logging.FileHandler(savepath, mode='a')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S'))
-    logger.addHandler(file_handler)
-    if not fresh:
-        logger.info("\t\tRESTART\n\n")
+    # Create file handlers
+    savepath_info = os.path.join(config.LOGGING.DIR, config.TAG, "info.txt")
+    savepath_debug = os.path.join(config.LOGGING.DIR, config.TAG, "debug.txt")
 
+    #   - Create info handler
+    if not os.path.exists(savepath_info):
+        os.makedirs(os.path.dirname(savepath_info), exist_ok=True)
+        open(savepath_info, mode='w').close()
+    info_handler = logging.FileHandler(savepath_info, mode='a')
+    info_handler.setLevel(logging.INFO)
+    info_handler.setFormatter(logging.Formatter(info_fmt, datefmt))
+
+    #   - Create debug handler
+    if not os.path.exists(savepath_debug):
+        os.makedirs(os.path.dirname(savepath_debug), exist_ok=True)
+        open(savepath_debug, mode='w').close()
+    debug_handler = logging.FileHandler(savepath_debug, mode='a')
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(logging.Formatter(debug_fmt, datefmt))
+
+    #   - Create console handler
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(logging.Formatter(stdout_fmt, datefmt))
+
+    logger.addHandler(info_handler)
+    logger.addHandler(debug_handler)
+    logger.addHandler(stdout_handler)
+    pid = os.getpid()
+    logger.info(f"\n\n\t\t=== > STARTING TRAINING, process PID: {pid} === >\n\n")
+
+    # Log git commit hash and branch
+    try:
+        git_branch = subprocess.check_output(
+            ["git", "describe", "--all"]).decode("ascii").strip()
+        git_commit = subprocess.check_output(
+            ["git", "describe", "--always", "--abbrev=32"]).decode("ascii").strip()
+        logger.info(f"\tOn branch: {git_branch}")
+        logger.info(f"\tCommit hash: {git_commit}")
+    except subprocess.CalledProcessError:
+        pass
     return logger

@@ -1,0 +1,59 @@
+TAG: MobileNetQA-YCbCr-run1
+SEED: 7
+COMMENT: "YCbCr inputs"
+
+DATA:
+  NAME: "DIV2K+Flickr2K"
+  LOCATIONS:
+    TRAIN:  ["data/DIV2K/DIV2K_train_HR", "data/Flickr2K/"]
+    VAL:    ["data/DIV2K/DIV2K_valid_HR/"]
+    TEST:   ["data/live1/refimgs/"]
+  PATCH_SIZE: 128
+  REGION_SIZE: 800
+  NUM_PATCHES: 16
+  SUBSAMPLE: 444
+  MIN_QUALITY: 5
+  MAX_QUALITY: 100
+  CACHED: False
+  CACHE_MEMORY: 16
+  USE_LQ_RGB: False
+  USE_LQ_YCC: True
+  USE_LQ_DCT: False
+  USE_HQ_RGB: False
+  USE_HQ_YCC: False
+  USE_HQ_DCT: False
+  USE_QTABLES: False
+  PIN_MEMORY: True
+  SHUFFLE: True
+  NUM_WORKERS: 0
+MODEL:
+  NAME: MobileNetQA-YCbCr
+  CLASS: MobileNetQA
+  INPUTS: ["lq_ycc"]
+  TARGETS: ["quality"]
+TRAIN:
+  DEVICE: "mps"
+  BATCH_SIZE: 128
+  NUM_ITERATIONS: 25_000
+  WARMUP_ITERATIONS: 1000
+  CLIP_GRAD: -1.0
+  CLIP_GRAD_METHOD: "total"
+  BASE_LR: 1.0e-3
+  WARMUP_LR: 1.0e-5
+  LR_SCHEDULER:
+    NAME: cosine
+    KWARGS: [[T_0, 24_000], [eta_min, 5.0e-6], [T_mult, 2]]
+    WARMUP_PREFIX: True
+  CHECKPOINT_EVERY: 500
+  CHECKPOINT_DIR: /Volumes/SiliconPower/jpeg-deblock/checkpoints/
+VALIDATION:
+  BATCH_SIZE: 128
+  EVERY: 250
+  QUALITIES: [10, 20, 30, 40, 50, 60, 80, 90]
+TEST:
+  ENABLED: False
+LOGGING:
+  DIR: /Volumes/SiliconPower/jpeg-deblock/logs
+  LOG_EVERY: 50
+  WANDB: False
+  PLOTS: True

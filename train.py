@@ -1,208 +1,387 @@
+"""Script for training CNN for JPEG Quality Assesment"""
+
 import argparse
 import datetime
+import logging
 import os
 import time
-from typing import List, Callable
-import yaml
+from typing import *
 
+import numpy as np
+import torch
+import torchvision
+import torchvision.transforms.functional
 from yacs.config import CfgNode
+import wandb
 
-from config import default_config, get_config
+from config import get_config
 from builders import *
-from utils import RunningStats, save_checkpoint, load_checkpoint
-from jpegutils import SUBSAMPLE_FACTORS
+from monitoring import TrainingMonitor
+from utils import (
+    collect_inputs,
+    collect_target,
+    save_checkpoint,
+    load_checkpoint,
+    yacs_to_dict,
+    clip_gradients,
+    get_alloc_memory
+)
 
 
-def main(cfg):
+def train(
+        config:         CfgNode,
+        model:          torch.nn.Module,
+        dataloader:     torch.utils.data.DataLoader,
+        criterion:      Callable,
+        optimizer:      torch.optim.Optimizer,
+        lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
+        monitor:        TrainingMonitor,
+        start_iter:     int,
+        max_iters:      int
+):
 
-    device = torch.device(cfg.TRAIN.DEVICE)
+    current_iter =          start_iter
+    device =                config.TRAIN.DEVICE
+    accum =                 config.TRAIN.ACCUMULATE_GRADS
+    clip_grad_method =      config.TRAIN.CLIP_GRAD_METHOD
+    max_norm =              config.TRAIN.CLIP_GRAD
+    checkpoint_every =      config.TRAIN.CHECKPOINT_EVERY
+    log_every =             config.LOGGING.LOG_EVERY
+    total_iters =           config.TRAIN.NUM_ITERATIONS
 
-    train_loader    = build_dataloader(cfg, "train")
-    val_loader      = build_dataloader(cfg, "val")
-    test_loader     = build_dataloader(cfg, "test")
-
-    spectre         = build_spectral_net(cfg).to(device)
-    chroma          = build_chroma_net(cfg).to(device)
-    criterion       = build_criterion(cfg)
-
-    optim           = build_optimizer(cfg, spectre.parameters(), chroma.parameters())
-    lr_scheduler    = build_lr_scheduler(cfg, optim)
-    logger          = build_logger(cfg)
-
-    if cfg.TRAIN.CHECKPOINT_EVERY > 0:
-        os.makedirs(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.MODEL.NAME),
-                    exist_ok=True)
-
-    train_loop(cfg, spectre, chroma, criterion, train_loader, optim,
-               lr_scheduler, logger)
-
-
-
-def predict_train(spectral_net, chroma_net, datapoint, subsample: str):
-    input_yy_dct =  datapoint["lq_dct_y"]
-    input_cb_dct =  datapoint["lq_dct_cb"]
-    input_cr_dct =  datapoint["lq_dct_cr"]
-    qt_luma =       datapoint["qt_y"]
-    qt_chroma =     datapoint["qt_c"]
-
-    out_yy = spectral_net(input_yy_dct, qt_luma, chroma=False)
-    out_cb = spectral_net(input_cb_dct, qt_chroma, chroma=True)
-    out_cr = spectral_net(input_cr_dct, qt_chroma, chroma=True)
-
-    scale = SUBSAMPLE_FACTORS[subsample]
-
-    # Upsample chroma components
-    upsampled_cb = torch.nn.functional.interpolate(
-        out_cb, scale_factor=scale, mode="nearest"
-    )
-    upsampled_cr = torch.nn.functional.interpolate(
-        out_cr, scale_factor=scale, mode="nearest"
-    )
-
-    # Concatenate Y, Cb+, Cr+ planes
-    ycc = torch.concatenate([out_yy, upsampled_cb, upsampled_cr], dim=1)
-    enhanced = chroma_net(ycc)
-    assert ycc.shape[1] == 3
-
-    return {"Y": out_yy, "Cb": out_cb, "Cr": out_cr, "final": enhanced}
-
-
-def train_loop(
-        config: CfgNode,
-        spectral_net: torch.nn.Module,
-        chroma_net: torch.nn.Module,
-        criterion: Callable,
-        train_loader: torch.utils.data.DataLoader,
-        optimizer: torch.optim.Optimizer,
-        lr_scheduler,
-        logger
-    ):
-
-    spectral_net.train()
-    chroma_net.train()
+    model.train()
     optimizer.zero_grad()
 
-    rgbout = config.MODEL.RGB_OUTPUT
-    clip_grad = config.TRAIN.CLIP_GRAD > 0.0
+    dataiter = iter(dataloader)
+    batch = next(dataiter)
+    while current_iter < max_iters:
+        tic = time.time()
+        # Advance iteration number
+        current_iter += 1
+        monitor.step()
 
-    max_iters = config.TRAIN.NUM_ITERATIONS
-    current_iter = 0
-    subsample   = config.DATA.SUBSAMPLE
-    batch_time_meter = RunningStats()
-    total_loss_meter = RunningStats()
-    spectral_loss_meter = RunningStats()
-    chroma_loss_meter = RunningStats()
-    spectral_grad_norm_meter = RunningStats()
-    chroma_grad_norm_meter = RunningStats()
+        # Collect input arguments to `model` & target
+        inputs = collect_inputs(config, model, batch)
+        target = collect_target(config, model, batch)
 
-    while True:
-        train_iterable = iter(train_loader)
-        for datapoint in train_iterable:
-            # Increment iteration number
-            if current_iter >= max_iters:
-                break
-            current_iter += 1
+        # Transfer inputs & target to device
+        inputs = {k: x.to(device=device) for k, x in inputs.items()}
+        target = target.to(device=device)
 
-            tic = time.time()
-            # Make predictions
-            preds = predict_train(spectral_net, chroma_net, datapoint, subsample)
-            targets = {
-                "Y":        datapoint["hq_y"],
-                "Cb":       datapoint["hq_cb"],
-                "Cr":       datapoint["hq_cr"],
-                "final":    datapoint["hq_rgb"] if rgbout else datapoint["hq_ycc"]
-            }
+        # Run forward pass (asynchronous)
+        preds = model(**inputs)
 
-            # Compute loss
-            loss = criterion(preds, targets)
-            loss["total"].backward()
+        # Calculate loss
+        loss = criterion(preds, target) / accum
 
+        # Run backward pass
+        loss.backward()
+
+        # Fetch next datapoint, while backward pass runs asynchronously on device
+        try:
+            batch = next(dataiter)
+        except StopIteration:
+            dataiter = iter(dataloader)
+            batch = next(dataiter)
+
+        # Update parameters
+        if current_iter % accum == 0:
             # Clip gradients
-            if clip_grad:
-                spectral_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    spectral_net.parameters(),
-                    max_norm = config.TRAIN.CLIP_GRAD,
-                    error_if_nonfinite=True
-                )
-                chroma_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    chroma_net.parameters(),
-                    max_norm = config.TRAIN.CLIP_GRAD,
-                    error_if_nonfinite=True
-                )
+            clip_gradients(model, max_norm, clip_grad_method)
+            # We're about to log. Save old paramters
+            if current_iter % log_every == 0:
+                old_params = {n: p.detach().clone() for n, p in model.named_parameters()}
             else:
-                spectral_grad_norm = -1.0
-                chroma_grad_norm   = -1.0
-
-            # Optimize
+                old_params = None
             optimizer.step()
-            lr_scheduler.step()
+
+        # Update learning rate
+        lr_scheduler.step()
+
+        # Log stats
+        if current_iter % log_every == 0:
+            loss_ = accum * loss.detach().item()
+            if isinstance(criterion, torch.nn.MSELoss):
+                mse_ = loss_
+            else:
+                with torch.no_grad():
+                    mse_ = torch.nn.functional.mse_loss(preds, target).item()
+            psnr_ = -10.0 * np.log10(mse_)
+            lr_   = lr_scheduler.get_last_lr()[0]
+            batch_time = time.time() - tic
+            eta   = int(batch_time * (total_iters - current_iter))
+
+            monitor.add_scalar({"loss": loss_, "lr": lr_, "mse": mse_, "psnr": psnr_})
+            monitor.log(
+                logging.INFO,
+                f"Train: [{current_iter:>6}/{total_iters:>6}]\t"
+                f"time: {batch_time:.2f}\t"
+                f"eta: {datetime.timedelta(seconds=eta)}\t"
+                f"loss: {loss_:.4f}\t"
+                f"mse: {mse_:4f}\t"
+                f"psnr: {psnr_:.5f}\t"
+                f"lr: {lr_:.6f}\t"
+                f"memory: {get_alloc_memory(config):.0f}MB"
+            )
+            # Log gradient norms
+            monitor.log_grad_norms(model.named_parameters())
+            # Log parameters
+            monitor.log_params(model.named_parameters())
+            # Log relative parameter updates
+            monitor.log_param_updates(old_params, model.named_parameters())
+            del old_params
+
+        # Checkpoint model
+        if current_iter % checkpoint_every == 0:
+            savestate = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "lr_scheduler": lr_scheduler.state_dict(),
+                "iteration": current_iter,
+            }
+            save_checkpoint(savestate, config, monitor)
+
+        # Zero gradients
+        if current_iter % accum == 0:
             optimizer.zero_grad()
 
-            # Update meters
-            elapsed_time = time.time() - tic
-            batch_time_meter.update(elapsed_time)
-            total_loss_meter.update(loss["total"].item())
-            spectral_loss_meter.update(loss["spectral"].item())
-            chroma_loss_meter.update(loss["chroma"].item())
-            spectral_grad_norm_meter.update(spectral_grad_norm.cpu().numpy())
-            chroma_grad_norm_meter.update(chroma_grad_norm.cpu().numpy())
 
-            # Checkpoint models
-            if current_iter % config.TRAIN.CHECKPOINT_EVERY == 0:
-                savestate = {
-                    "spectral": spectral_net.state_dict(),
-                    "chroma": chroma_net.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "lr_scheduler": lr_scheduler.state_dict(),
-                    "iteration": current_iter,
-                    "psnr": -1
-                }
-                save_checkpoint(savestate, config, logger)
+@torch.no_grad()
+def validate(
+    config:     CfgNode,
+    model:      torch.nn.Module,
+    criterion:  Callable,
+    quality:    Union[int, List[int]],
+    monitor:    TrainingMonitor
+):
 
-            # Log
-            if current_iter % config.LOGGING.LOG_EVERY == 0:
-                lr = lr_scheduler.get_last_lr()[0]
-                wd = optimizer.param_groups[0]["weight_decay"]
-                memory_used = get_alloc_memory(config)
-                eta = batch_time_meter.mean * (max_iters - current_iter)
+    tic = time.time()
+    val_losses = {}
+    val_mse = {}
+    device = config.TRAIN.DEVICE
 
-                logger.info(
-                    f"Train: [{current_iter:>6}/{max_iters:>6}]\t"
-                    f"eta: {datetime.timedelta(seconds=int(eta))}\t"
-                    f"lr: {lr:.6f}\t wd {wd:.4f}\t"
-                    f"time: {batch_time_meter.mean:.4f} ± {batch_time_meter.std:.4f}\t"
-                    f"spectral loss: {spectral_loss_meter.mean:.4f} ± {spectral_loss_meter.std:.4f}\t"
-                    f"chroma loss: {chroma_loss_meter.mean:.4f} ± {chroma_loss_meter.std:.4f}\t"
-                    f"total loss: {total_loss_meter.mean:.4f} ± {total_loss_meter.std:.4f}\t"
-                    f"spectral grad norm: {spectral_grad_norm_meter.mean:.4f} ± {spectral_grad_norm_meter.std:.4f}\t"
-                    f"chroma grad norm: {chroma_grad_norm_meter.mean:.4f} ± {chroma_grad_norm_meter.std:.4f}\t"
-                    f"memory: {memory_used:.0f}MB"
-                )
+    if isinstance(quality, int):
+        quality = [quality]
 
-                # Reset meters
-                batch_time_meter.reset()
-                total_loss_meter.reset()
-                spectral_loss_meter.reset()
-                chroma_loss_meter.reset()
-                spectral_grad_norm_meter.reset()
-                chroma_grad_norm_meter.reset()
+    for q in quality:
+        # Init dataloader with input image quality = `q`
+        dataloader = build_dataloader(config, kind="val", quality=q)
+        # Iterate trough validation images
+        for batch in dataloader:
+            inputs = collect_inputs(config, model, batch)
+            target = collect_target(config, model, batch)
 
-        if current_iter >= max_iters:
-            break
+            # Transfer inputs & target to device
+            inputs = {k: x.to(device=device) for k, x in inputs.items()}
+            target = target.to(device=device)
+
+            preds = model(**inputs)
+            loss = criterion(preds, target)
+            if isinstance(criterion, torch.nn.MSELoss):
+                mse = loss
+            else:
+                mse = torch.nn.functional.mse_loss(preds, target)
+            val_losses.setdefault(q, []).append(loss.item())
+            val_mse.setdefault(q, []).append(mse.item())
+
+    current_iter = monitor.get_step()
+    total_iters = config.TRAIN.NUM_ITERATIONS
+
+    for q in quality:
+        loss_values = val_losses[q]
+        mse_values  = val_mse[q]
+
+        loss_mean = np.mean(loss_values)
+        loss_std  = np.std(loss_values)
+        mse_mean  = np.mean(mse_values)
+        mse_std   = np.std(mse_values)
+        psnr      = -10.0 * np.log10(mse_mean)
+
+        monitor.log(
+            logging.INFO,
+            f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
+            f"loss(q={q}): {loss_mean:.4f} ± {loss_std:.4f}\t"
+            f"mse(q={q}): {mse_mean:.4f} ± {mse_std:.4f}\t"
+            f"psnr(q={q}): {psnr:.5f}"
+        )
+        monitor.add_scalar({f"validation/loss-q={q}": loss_mean,
+                            f"validation/mse-q={q}": mse_mean,
+                            f"validation/psnr-q={q}": psnr})
+
+    monitor.log(
+        logging.INFO,
+        f"Validate: [{current_iter:>6}/{total_iters:>6}]\t"
+        f"time: {(time.time() - tic):.2f}"
+    )
+    return
 
 
-def validate():
-    pass
+@torch.no_grad()
+def test_samples(
+        config:     CfgNode,
+        model:      torch.nn.Module,
+        quality:    Union[int, List[int]],
+        monitor:    TrainingMonitor
+):
+    current_iter = monitor.get_step()
+    total_iters  = config.TRAIN.NUM_ITERATIONS
+    device       = config.TRAIN.DEVICE
+
+    # Create output directory. `os.makedirs()` is with `exist_ok=False`,
+    # because this directory should not exist. It it exists, this function
+    # will probably overwrite images in it and that's not what we want
+    savedir = os.path.join(config.LOGGING.DIR, config.TAG, "testsamples", str(current_iter))
+    os.makedirs(savedir, exist_ok=False)
+
+    to_uint8 = torchvision.transforms.ConvertImageDtype(torch.uint8)
+
+    if isinstance(quality, int):
+        quality = [quality]
+
+    tic = time.time()
+    for q in quality:
+        # initialize dataloader with quality = `q`
+        dataloader = build_dataloader(config, kind="test", quality=q)
+        # Iterate trough all test images, encoded with quality = `q`
+        for batch in dataloader:
+            # Collect & transfer inputs to device
+            inputs = collect_inputs(config, model, batch)
+            inputs = {k: x.to(device=device) for k, x in inputs.items()}
+            # Make predictions
+            preds = model(**inputs)
+            # Save images
+            filepaths = batch["filepath"]
+            for path, pred in zip(filepaths, preds):
+                name = os.path.basename(path)
+                # Strip extension from source filename
+                name = '.'.join(name.split('.')[:-1])
+                savepath = os.path.join(savedir, name + f"-q={q}.png")
+                # Convert image from float32 to uint8 and save it as PNG
+                img = to_uint8(torch.clip(pred.cpu(), 0.0, 1.0))
+                torchvision.io.write_png(img, savepath)
+    t = time.time() - tic
+
+    monitor.log(
+        logging.INFO,
+        f"Test samples: [{current_iter:>6}/{total_iters:>6}]\t"
+        f"time: {t:.2f}\t"
+    )
+    return
 
 
-def get_alloc_memory(config):
-    if config.TRAIN.DEVICE == "cuda":
-        return torch.cuda.max_memory_allocated() / (2 ** 20)
-    elif config.TRAIN.DEVICE == "mps":
-        return torch.mps.current_allocated_memory() / (2 ** 20)
-    else:
-        return -1.0
+def train_validate_loop(
+        config:         CfgNode,
+        model:          torch.nn.Module,
+        train_loader:   torch.utils.data.DataLoader,
+        criterion:      Callable,
+        optimizer:      torch.optim.Optimizer,
+        lr_scheduler:   torch.optim.lr_scheduler.LRScheduler,
+        monitor:        TrainingMonitor
+):
 
+    val_every       = config.VALIDATION.EVERY
+    max_iters       = config.TRAIN.NUM_ITERATIONS
+    test_qualities  = config.TEST.QUALITIES
+    val_qualities   = config.VALIDATION.QUALITIES
+
+    plots_dir = os.path.join(config.LOGGING.DIR, config.TAG, "plots")
+    monitor_path = os.path.join(config.LOGGING.DIR, config.TAG, "monitor.pickle")
+
+    for i in range(0, max_iters, val_every):
+        train(config, model, train_loader, criterion, optimizer, lr_scheduler,
+              monitor, start_iter=i, max_iters=min(max_iters, i+val_every))
+        # Validate
+        validate(config, model, criterion, val_qualities, monitor)
+        # Test samples
+        if config.TEST.ENABLED:
+            test_samples(config, model, test_qualities, monitor)
+        # Plots
+        if config.LOGGING.PLOTS:
+            monitor.plot_scalars(plots_dir)
+        monitor.save_state(monitor_path)
+        # Repeat...
+
+
+def main(cfg: CfgNode):
+
+    # Init device
+    device = torch.device(cfg.TRAIN.DEVICE)
+
+    # Init logger
+    logger = build_logger(cfg)
+    logger.log(logging.INFO, "Logger initialized...")
+
+    # Init WANDB (is config flag for it is on)
+    if cfg.LOGGING.WANDB:
+        wandb.init(project=cfg.TAG, config=yacs_to_dict(cfg))
+
+    # Init monitor
+    monitor = TrainingMonitor(logger, cfg.LOGGING.WANDB)
+
+    # Init dataloaders
+    train_loader = build_dataloader(cfg, "train")
+    logger.log(logging.INFO, "Train dataloader initialized...")
+
+    # Init models
+    model = build_model(cfg).to(device)
+    logger.log(logging.INFO, "Model initialized...")
+    if cfg.LOGGING.WANDB:
+        wandb.watch(model, log="all", log_freq=100, log_graph=False)
+
+    # Init criterion
+    criterion = build_criterion(cfg)
+
+    # Init optimizer & scheduler
+    optim        = build_optimizer(cfg, model.parameters())
+    lr_scheduler = build_lr_scheduler(cfg, optim)
+    logger.log(logging.INFO, "Optimizer & LR Scheduler initialized...")
+
+    # Check if checkpoint directory already exists. It shouldn't !
+    if cfg.TRAIN.CHECKPOINT_EVERY > 0:
+        if os.path.exists(os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.TAG)):
+            raise(OSError("Checkpoint directory already exists!"))
+
+    # Optionally load checkpoint
+    if cfg.TRAIN.RESUME:
+        state = {
+            "model": model,
+            "optimizer": optim,
+            "lr_scheduler": lr_scheduler,
+            "iteration": cfg.TRAIN.START_ITERATION,
+        }
+        cfg = load_checkpoint(state, cfg, monitor)
+        model = state["model"]
+        optim = state["optimizer"]
+        lr_scheduler = state["lr_scheduler"]
+
+    # Jump to training loop
+    logger.log(logging.INFO, "Entering train loop...")
+    train_validate_loop(
+        config=             cfg,
+        model=              model,
+        train_loader=       train_loader,
+        criterion=          criterion,
+        optimizer=          optim,
+        lr_scheduler=       lr_scheduler,
+        monitor=            monitor
+    )
+
+    # Save model & optimizer
+    modelpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "model.pth")
+    optimpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "optimizer.pth")
+    torch.save(model.state_dict(), modelpath)
+    logger.log(logging.INFO, f"Saved model -> \"{modelpath}\"")
+    torch.save(optim.state_dict(), optimpath)
+    logger.log(logging.INFO, f"Saved optimizer -> \"{optimpath}\"")
+
+    # Save monitor
+    monitorpath = os.path.join(cfg.LOGGING.DIR, cfg.TAG, "monitor.pickle")
+    monitor.save_state(monitorpath)
+    logger.log(logging.INFO, f"Saved monitor -> \"{monitorpath}\"")
+
+    # Exit wandb
+    if cfg.LOGGING.WANDB:
+        wandb.finish()
 
 
 if __name__ == "__main__":

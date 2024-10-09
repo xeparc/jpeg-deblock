@@ -1,0 +1,69 @@
+TAG: FlareLuma.Fast-run1
+SEED: 7
+COMMENT: "Flare.Luma - 230k parameters, depthwise separable convolutions, Charbonnier loss."
+
+DATA:
+  NAME: "DIV2K+Flickr2K"
+  LOCATIONS:
+    TRAIN:  ["data/DIV2K/DIV2K_train_HR", "data/Flickr2K/"]
+    VAL:    ["data/DIV2K/DIV2K_valid_HR/"]
+    TEST:   ["data/live1/refimgs/"]
+  PATCH_SIZE: 128
+  REGION_SIZE: -1
+  NUM_PATCHES: 16
+  SUBSAMPLE: 444
+  MIN_QUALITY: 10
+  MAX_QUALITY: 80
+  TARGET_QUALITY: 100
+  CACHED: False
+  CACHE_MEMORY: 32
+  USE_LQ_RGB: False
+  USE_LQ_YCC: True
+  USE_LQ_DCT: True
+  USE_HQ_RGB: False
+  USE_HQ_YCC: True
+  USE_HQ_DCT: False
+  USE_QTABLES: True
+  NORMALIZE_DCT: True
+  INVERT_QT: False
+  DCT_STATS_FILEPATH: "data/DIV2K+Flickr2K-dct-stats.json"
+  PIN_MEMORY: True
+  SHUFFLE: True
+  NUM_WORKERS: 0
+MODEL:
+  NAME: Flare.Luma
+  CLASS: FlareLuma
+  FLARE:
+    LUMA:
+      KWARGS: [[residual, True], [base_channels, 16], [blocks_per_stage, 1], [channel_multiplier, 2], [weight_scale, 1.0], [depthwise_separable, True]]
+TRAIN:
+  DEVICE: "cuda"
+  BATCH_SIZE: 64
+  ACCUMULATE_GRADS: 2
+  NUM_ITERATIONS: 100_000
+  WARMUP_ITERATIONS: 10_000
+  CLIP_GRAD: 10.0
+  CLIP_GRAD_METHOD: "total"
+  BASE_LR: 4.0e-4
+  WARMUP_LR: 5.0e-5
+  LR_SCHEDULER:
+    NAME: cosine
+    KWARGS: [[T_0, 90_000], [eta_min, 1.0e-5], [T_mult, 2]]
+  CHECKPOINT_EVERY: 500
+  CHECKPOINT_DIR: checkpoints/
+  LOSS:
+    CRITERION: CharbonnierLoss
+VALIDATION:
+  BATCH_SIZE: 64
+  EVERY: 1000
+  QUALITIES: [10, 20, 40, 60]
+TEST:
+  ENABLED: True
+  BATCH_SIZE: 1
+  QUALITIES: [10, 20, 40, 60, 80]
+  REGION_SIZE: 512
+LOGGING:
+  DIR: logs/
+  LOG_EVERY: 100
+  WANDB: False
+  PLOTS: True

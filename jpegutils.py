@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import numpy as np
 from scipy.fft import dctn, idctn
+from scipy.ndimage import zoom
 from turbojpeg import (
     TurboJPEG,
     TJCS_RGB, TJFLAG_ACCURATEDCT,
@@ -84,7 +85,7 @@ class JPEGTransforms:
         upsampled = upsample_chrominance(planes, subsample)
         # Crop
         res = [plane[:self.height, :self.width] for plane in upsampled]
-        return np.stack(res, axis=0)
+        return np.stack(res, axis=2)
 
     @lru_cache
     def get_dct_planes(self, subsample: str) -> List[np.ndarray]:
@@ -198,8 +199,11 @@ def upsample_chrominance(ycc: List[np.ndarray], subsample: str) -> List[np.ndarr
     Y, Cb, Cr = ycc
     crop_h, crop_w = Y.shape
     h_repeat, w_repeat = SUBSAMPLE_FACTORS[subsample]
-    cb = np.repeat(np.repeat(Cb, h_repeat, axis=0), w_repeat, axis=1)
-    cr = np.repeat(np.repeat(Cr, h_repeat, axis=0), w_repeat, axis=1)
+    if h_repeat == 1 and w_repeat == 1:
+        cb, cr = Cb, Cr
+    else:
+        cb = zoom(Cb, (h_repeat, w_repeat), order=1)
+        cr = zoom(Cr, (h_repeat, w_repeat), order=1)
     return [Y, cb[:crop_h, :crop_w], cr[:crop_h, :crop_w] ]
 
 
