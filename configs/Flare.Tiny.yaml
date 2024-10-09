@@ -50,7 +50,7 @@ TRAIN:
   WARMUP_LR: 5.0e-5
   LR_SCHEDULER:
     NAME: cosine
-    KWARGS: [[T_0, 80_000], [eta_min, 5.0e-5], [T_mult, 2]]
+    KWARGS: [[T_0, 80_010], [eta_min, 5.0e-5], [T_mult, 2]]
   CHECKPOINT_EVERY: 10_000
   CHECKPOINT_DIR: checkpoints/
   LOSS:
