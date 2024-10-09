@@ -34,7 +34,7 @@ MODEL:
   NAME: FlareChroma
   CLASS: Flare
   FLARE:
-    KWARGS: [[luma_params, "../logs/Flare.Luma.Large/model.pth"], [freeze_luma, True]]
+    KWARGS: [[luma_params, "logs/FlareLuma.Large-final/model.pth"], [freeze_luma, True]]
     LUMA:
       KWARGS: [[residual, True], [base_channels, 64], [blocks_per_stage, 1], [channel_multiplier, 2.0], [weight_scale, 1.0], [depthwise_separable, False]]
     CHROMA:
