@@ -64,8 +64,8 @@ class PerceptualLoss(nn.Module):
 
 class Q1PerceptualLoss:
 
-    def __init__(self, params_path: str, indices=(4,),
-                 weights=(0.3, 0.3, 0.4), device="cpu"):
+    def __init__(self, params_path: str, indices=(2,3,4),
+                 weights=(1.0, 1.0, 1.0), device="cpu"):
         q1net = Q1Net(in_channels=3)
         state = torch.load(params_path, weights_only=True, map_location="cpu")
         q1net.load_state_dict(state)
@@ -79,7 +79,7 @@ class Q1PerceptualLoss:
 
 class MixedQ1MSELoss:
 
-    def __init__(self, alpha=0.5, **kwargs):
+    def __init__(self, alpha=0.1, **kwargs):
         self.alpha = alpha
         self.ploss = Q1PerceptualLoss(**kwargs)
 
@@ -91,7 +91,7 @@ class MixedQ1MSELoss:
 
 class CharbonnierLoss:
 
-    def __call__(self, x, target, reduction="mean", eps=1e-3):
+    def __call__(self, x, target, reduction="mean", eps=1e-8):
         l = torch.sqrt((x - target) ** 2 + eps)
         if reduction == "mean":
             return torch.mean(l)
