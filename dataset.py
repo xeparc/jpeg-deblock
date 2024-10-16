@@ -216,6 +216,40 @@ class DatasetQuantizedJPEG(torch.utils.data.Dataset):
         return res
 
 
+class EvaluationDataset(torch.utils.data.Dataset):
+
+    def __init__(self, compressed_dir, originals_dir):
+        self.compressed_dir = compressed_dir
+        self.originals_dir = originals_dir
+
+        # Collect filepaths
+        self.compressed = {}
+        for item in os.scandir(self.compressed_dir):
+            if item.name.startswith('.'):
+                continue
+            key = os.path.splitext(item.name)[0]
+            self.compressed[key] = item.path
+
+        self.originals = {}
+        for item in os.scandir(self.originals_dir):
+            if item.name.startswith('.'):
+                continue
+            key = os.path.splitext(item.name)[0]
+            self.originals[key] = item.path
+
+        assert len(self.compressed) == len(self.originals)
+        assert self.compressed.keys() == self.originals.keys()
+        self.keys = list(self.originals.keys())
+
+    def __len__(self):
+        return len(self.originals)
+
+    def __getitem__(self, index):
+        key = self.keys[index]
+        return self.compressed[key], self.originals[key]
+
+
+
 class ExtractSubpatches:
     """ Extracts multiple non-overlapping subpatches from a source image."""
 
