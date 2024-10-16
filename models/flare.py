@@ -138,7 +138,7 @@ class FlareChroma(nn.Module):
 class Flare(nn.Module):
 
     def __init__(self, luma_net: nn.Module, chroma_net: nn.Module, rgb_output=True,
-                 luma_params="", freeze_luma=False, use_hq_luma=False):
+                 luma_params="", freeze_luma=False, use_hq_luma=False, upscale=False):
         super().__init__()
         self.rgb_output     = rgb_output
         self.luma           = luma_net
@@ -150,6 +150,10 @@ class Flare(nn.Module):
             self.luma.load_state_dict(state)
         if freeze_luma or use_hq_luma:
             self.luma.requires_grad_(False)
+        if upscale:
+            self.upscale = FlareUpscale()
+        else:
+            self.upscale = nn.Identity()
 
     def forward(self, y, cb, cr, dct_y, dct_cb, dct_cr, qt_y, qt_c):
         y_r     = y if self.use_hq_luma else self.luma(y, dct_y, qt_y)
@@ -160,4 +164,21 @@ class Flare(nn.Module):
         if ysize != csize:
             cbcr_r = torchvision.transforms.functional.resize(cbcr_r, ysize)
         ycc = torch.cat([y_r, cbcr_r], dim=1)
+        ycc = self.upscale(ycc)
         return self.out_transform(ycc)
+
+
+class FlareUpscale(nn.Module):
+
+    def __init__(self):
+
+        super().__init__()
+        self.stem = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.body = ResidualDenseBlock4C(in_channels=64, growth=32, weight_scale=1.0)
+        self.head = nn.Conv2d(in_channels=64, out_channels=3, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, ycc):
+        x = self.stem(ycc)
+        x = self.body(x)
+        x = self.head(x)
+        return ycc + x

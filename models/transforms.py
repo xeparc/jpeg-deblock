@@ -45,10 +45,10 @@ class  ToDCTTensor:
             self.skip_chroma = False
 
     def __call__(self, dct: np.ndarray, chroma: bool):
+        dct = torch.as_tensor(dct)
         assert dct.ndim == 4
         assert dct.shape[2] == dct.shape[3] == 8
         out_shape = dct.shape[:-2] + (64,)
-        dct = torch.from_numpy(dct)
         if chroma:
             if self.skip_chroma:
                 res = dct
@@ -68,7 +68,8 @@ class ToQTTensor(nn.Module):
         self.invert = invert
 
     def __call__(self, qtable: np.ndarray):
-        x = torch.as_tensor((qtable.astype(np.float32) - 1) / 254).ravel()
+        qtable = torch.as_tensor(qtable).float()
+        x = ((qtable - 1) / 254).ravel()
         if self.invert:
             return 1.0 - x
         else:
